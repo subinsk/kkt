@@ -44,6 +44,8 @@ export function useRoom(code: string) {
     let source: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+    /** When the live feed last proved it was alive. */
+    let lastTick = 0;
 
     const connect = () => {
       if (closed) return;
@@ -54,12 +56,14 @@ export function useRoom(code: string) {
       source.onopen = () => setConnected(true);
 
       source.addEventListener("snapshot", (e) => {
+        lastTick = Date.now();
         const next = JSON.parse((e as MessageEvent).data) as PublicGame;
         seqRef.current = Math.max(seqRef.current, next.seq);
         setGame(next);
       });
 
       source.addEventListener("game", (e) => {
+        lastTick = Date.now();
         const event = JSON.parse((e as MessageEvent).data) as RoomEvent;
         seqRef.current = Math.max(seqRef.current, event.seq);
 
@@ -81,6 +85,7 @@ export function useRoom(code: string) {
       });
 
       source.addEventListener("tick", (e) => {
+        lastTick = Date.now();
         const t = JSON.parse((e as MessageEvent).data) as {
           secondsLeft: number;
           phase: PublicGame["phase"];
@@ -109,12 +114,32 @@ export function useRoom(code: string) {
       }
     };
 
+    /**
+     * Polling fallback, and it is not belt-and-braces — it is what stops the UI
+     * freezing.
+     *
+     * The clock on screen advances off the once-a-second `tick` event. If that
+     * stream stalls the display simply stops at whatever second it last heard,
+     * which reads as a hung app even though the server is fine. Serverless hosts
+     * make this routine: the stream can land on an instance that does not hold
+     * the room, and on Vercel Hobby it is severed every sixty seconds anyway.
+     *
+     * So: watch for ticks, and if none arrives for three seconds, start polling
+     * state directly. The moment ticks resume, stop. SSE stays the fast path and
+     * the clock can never sit still while the round is running.
+     */
+    const poll = setInterval(() => {
+      if (Date.now() - lastTick < 3000) return;
+      void refresh();
+    }, 1000);
+
     void refresh();
     connect();
 
     return () => {
       closed = true;
       if (retry) clearTimeout(retry);
+      clearInterval(poll);
       source?.close();
     };
   }, [code]);
