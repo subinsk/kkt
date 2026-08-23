@@ -51,19 +51,27 @@ function JoinForm({
 }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Indian mobile: ten digits, ignoring spaces, dashes and a leading +91. */
+  const digits = phone.replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
+  const phoneOk = digits.length === 10;
+  const nameOk = name.trim().length > 0;
+  const ready = nameOk && phoneOk && !busy;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!ready) return;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch(`/api/room/${code}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone: consent ? phone : "", consent }),
+        // The number is required now, so entering it *is* the consent — the
+        // notice below the field says so in as many words.
+        body: JSON.stringify({ name, phone: digits, consent: true }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not join");
@@ -102,42 +110,47 @@ function JoinForm({
               required
               maxLength={24}
               autoComplete="given-name"
+              autoFocus
               placeholder="Rahul"
               className="panel-sunken w-full px-4 py-3 text-lg outline-none focus:border-[var(--brass)]"
             />
           </div>
 
-          <div className="panel p-4">
-            <label className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={consent}
-                onChange={(e) => setConsent(e.target.checked)}
-                className="mt-1 size-4 accent-[var(--brass)]"
-              />
-              <span className="text-sm leading-snug">
-                <span className="font-semibold">Phone a Friend</span> ke liye mera
-                number use kar sakte hain.
-                <span
-                  className="mt-1 block text-xs"
-                  style={{ color: "var(--cream-faint)" }}
-                >
-                  Sirf is game ke liye. Game khatam hote hi delete. Kabhi save
-                  nahi hota, kisi ko diya nahi jaata.
-                </span>
-              </span>
+          <div>
+            <label className="label-dim mb-2 block" htmlFor="phone">
+              Mobile number
             </label>
-
-            {consent && (
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="98765 43210"
-                className="panel-sunken mt-3 w-full px-4 py-3 text-lg outline-none focus:border-[var(--brass)]"
-              />
-            )}
+            <input
+              id="phone"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              required
+              inputMode="numeric"
+              autoComplete="tel"
+              maxLength={17}
+              placeholder="98765 43210"
+              className="panel-sunken w-full px-4 py-3 text-lg outline-none focus:border-[var(--brass)]"
+              style={{
+                borderColor:
+                  phone.length > 0 && !phoneOk ? "var(--signal-red)" : undefined,
+              }}
+            />
+            {/**
+             * Consent as a plain notice rather than a checkbox.
+             *
+             * The number is required, so a checkbox would be a gate with only
+             * one passable state — theatre, not consent. What actually matters
+             * is that the person reads what happens to it before they type it,
+             * so the notice sits under the field and says exactly that.
+             */}
+            <p
+              className="mt-2 text-xs leading-snug"
+              style={{ color: "var(--cream-faint)" }}
+            >
+              {phone.length > 0 && !phoneOk
+                ? `${digits.length}/10 digits`
+                : "Sirf Phone a Friend ke liye. Game khatam hote hi delete ho jaata hai — save nahi hota, kisi ko diya nahi jaata."}
+            </p>
           </div>
 
           {error && (
@@ -148,7 +161,7 @@ function JoinForm({
 
           <button
             type="submit"
-            disabled={busy || !name.trim()}
+            disabled={!ready}
             className="btn btn-brass w-full py-4 text-base"
           >
             {busy ? "Baith rahe hain…" : "Seat le lo"}

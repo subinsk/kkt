@@ -19,7 +19,9 @@ services:
     runtime: node
     plan: free
     region: singapore # closest to India — matters for RTC signalling latency
-    buildCommand: npm ci && npm run build
+    # render:audio runs here because public/audio/ is gitignored — the clips
+    # are regenerated from SARVAM_API_KEY at build time instead of committed.
+    buildCommand: npm ci && npm run render:audio && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:

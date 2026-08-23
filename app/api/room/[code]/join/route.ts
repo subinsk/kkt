@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { RtcTokenBuilder, RtcRole } from "agora-token";
 import { APP_CERTIFICATE, appId } from "@/lib/env";
-import { addPlayer, agentUidFor, getGame, publicView } from "@/lib/game/store";
+import {
+  addPlayer,
+  agentUidFor,
+  createGame,
+  getGame,
+  publicView,
+} from "@/lib/game/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,10 +33,15 @@ export async function POST(
 ) {
   try {
     const { code } = await ctx.params;
-    const game = getGame(code);
-    if (!game) {
-      return NextResponse.json({ error: `No room ${code}` }, { status: 404 });
-    }
+    /**
+     * Open the room if it does not exist yet.
+     *
+     * A contestant reaches this by pointing a camera at a QR code. If the
+     * projector has been reloaded — or somebody scans before it is up — a 404
+     * here is a dead end they cannot do anything about, in front of an audience.
+     * Creating the room is harmless and always the more useful answer.
+     */
+    const game = getGame(code) ?? createGame({ code });
 
     const body = (await request.json()) as {
       name?: string;

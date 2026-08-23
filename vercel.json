@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["bom1"],
+  "functions": {
+    "app/api/room/[code]/events/route.ts": { "maxDuration": 60 },
+    "app/api/llm/route.ts": { "maxDuration": 60 }
+  }
+}
