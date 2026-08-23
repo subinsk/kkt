@@ -222,6 +222,9 @@ export function useAgora(options: UseAgoraOptions) {
           // Published once and then enabled/disabled. Republishing on every
           // Peer Talk toggle would renegotiate and add a visible lag to a
           // button people press constantly.
+          // Muted before it is published, so a handset that joins mid-round
+          // never leaks a second of audio before the effect above catches up.
+          await track.setMuted(desiredMuteRef.current);
           await client.publish(track);
           publishedRef.current = true;
           setMicReady(true);
@@ -275,22 +278,28 @@ export function useAgora(options: UseAgoraOptions) {
   /* -------------------------------------------------- peer talk gate ----- */
 
   /**
-   * The single line that makes Peer Talk real — and the single owner of whether
-   * this handset is transmitting at all.
+   * The one place that decides whether this handset is transmitting.
    *
-   * `setEnabled(false)` stops the track being sent, so the host receives
-   * nothing. It is not a mute flag we are trusting the model to respect.
+   * `setMuted`, not `setEnabled`. On a track that is already published,
+   * `setEnabled(false)` tears the track down and republishes it on the way back
+   * — which is slow, can fail, and made the toggle feel dead or stick on. Mute
+   * keeps the track published and simply sends silence, so it flips instantly
+   * and cannot desync from the button.
    *
-   * Everything that can silence the mic resolves here, in one expression.
-   * Having two effects set `enabled` from different conditions is how you get a
-   * handset that is live when the UI says it is muted, which in this game means
-   * a private conversation going out over the room speakers.
+   * Everything that can silence the mic resolves in one expression. Two effects
+   * writing this from different conditions is how you get a handset that is live
+   * while the UI says muted — which in this game means a private conversation
+   * going out over the room speakers.
    */
+  const desiredMute = peerMode || forceSilent;
+  const desiredMuteRef = useRef(desiredMute);
+  desiredMuteRef.current = desiredMute;
+
   useEffect(() => {
     const track = localTrackRef.current;
     if (!track || !micReady) return;
-    void track.setEnabled(!peerMode && !forceSilent);
-  }, [peerMode, forceSilent, micReady]);
+    void track.setMuted(desiredMute);
+  }, [desiredMute, micReady]);
 
   /* ---------------------------------------------- level + telemetry ------ */
 
@@ -370,14 +379,16 @@ export function useAgora(options: UseAgoraOptions) {
     localTrackRef.current?.setVolume(speaking ? 25 : 100);
   }, []);
 
-  /** Used by the endgame, so the host is not parsing a cheering room. */
+  /** Escape hatch. Prefer `forceSilent`, which the effect above owns. */
   const setMicEnabled = useCallback((enabled: boolean) => {
-    void localTrackRef.current?.setEnabled(enabled);
+    void localTrackRef.current?.setMuted(!enabled);
   }, []);
 
   return {
     joined,
     micReady,
+    /** What the mic is actually doing, so the UI cannot claim otherwise. */
+    muted: desiredMute,
     error,
     agentLevel,
     agentPresent,

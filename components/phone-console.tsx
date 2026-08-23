@@ -293,7 +293,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const seatColor = SEAT_COLORS[session.player.seat] ?? SEAT_COLORS[0];
   const secondsLeft = game?.secondsLeft ?? 0;
   const panic = secondsLeft <= 60 && game?.phase === "running";
-  const live = !peerMode && !lifelineActive && !roundOver;
+  // Read from the hook, so the pill can never claim live while muted.
+  const live = !agora.muted;
 
   /**
    * A one-player room, where Peer Talk has nothing on the other end.
