@@ -7,8 +7,8 @@ import {
   interruptAgent,
   speak,
 } from "@/lib/agora-rest";
-import { AGENT_NAME, SYSTEM_PROMPT, greetingFor } from "@/lib/agent-config";
-import { agentUidFor, emit, getGame } from "@/lib/game/store";
+import { AGENT_NAME, SYSTEM_PROMPT, openingLine } from "@/lib/agent-config";
+import { agentUidFor, emit, getGame, openRound } from "@/lib/game/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +63,30 @@ export async function POST(
         return NextResponse.json({ agentId: existing, alreadyRunning: true });
       }
 
+      /**
+       * Choose the opening wire before the host says a word.
+       *
+       * The greeting is TTS'd verbatim with no LLM turn behind it, so the first
+       * riddle can only be in it if the wire is already picked. Doing it here —
+       * rather than after the clock starts — is what lets the round open on a
+       * question instead of on "toh bataiye, kis taar se shuru karein?".
+       */
+      const opening = openRound(game);
+      /**
+       * A greeting that promises a question and then does not ask one is dead
+       * air with no error anywhere — the exact failure mode this project keeps
+       * turning into a loud one. So refuse to join instead.
+       */
+      if (!opening?.riddle?.speak) {
+        return NextResponse.json(
+          {
+            error:
+              "No riddle available for the opening wire — cannot open the round.",
+          },
+          { status: 500 },
+        );
+      }
+
       const agentUid = agentUidFor(game.code);
       const expireAt = Math.floor(Date.now() / 1000) + 3600;
       const agentToken = RtcTokenBuilder.buildTokenWithUid(
@@ -89,7 +113,11 @@ export async function POST(
               token: agentToken,
               agentUid: String(agentUid),
               systemPrompt: SYSTEM_PROMPT,
-              greeting: greetingFor(game.players.map((p) => p.name)),
+              greeting: openingLine({
+                players: game.players.map((p) => p.name),
+                wire: opening.wire.color,
+                riddle: opening.riddle.speak,
+              }),
             }),
           },
         },

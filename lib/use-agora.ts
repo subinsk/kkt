@@ -87,6 +87,32 @@ export type UseAgoraOptions = {
   forceSilent?: boolean;
 };
 
+/**
+ * One in-flight lifecycle per channel+uid, serialised.
+ *
+ * React StrictMode mounts every effect twice in development: mount, cleanup,
+ * mount. `client.leave()` is async, so the second join starts while the first
+ * connection is still tearing down — and Agora rejects the duplicate with
+ * `UID_CONFLICT`, which surfaces as "mic problem" on the handset with no hint
+ * that it was self-inflicted.
+ *
+ * Chaining every join and leave for a given uid onto the same promise makes the
+ * second mount wait for the first to finish leaving. Keyed by channel+uid rather
+ * than globally, so three contestants still connect in parallel.
+ */
+const lifecycles = new Map<string, Promise<unknown>>();
+
+function serialise<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const previous = lifecycles.get(key) ?? Promise.resolve();
+  // Swallow the predecessor's failure — a failed leave must not block the join.
+  const next = previous.catch(() => {}).then(work);
+  lifecycles.set(
+    key,
+    next.catch(() => {}),
+  );
+  return next;
+}
+
 export function useAgora(options: UseAgoraOptions) {
   const {
     role,
@@ -119,7 +145,9 @@ export function useAgora(options: UseAgoraOptions) {
     let cancelled = false;
     let client: IAgoraRTCClient | null = null;
 
-    (async () => {
+    const key = `${credentials.channel}:${credentials.uid}`;
+
+    void serialise(key, async () => {
       try {
         // Browser-only SDK — importing it at module scope breaks the server
         // render of any page that uses this hook.
@@ -200,25 +228,42 @@ export function useAgora(options: UseAgoraOptions) {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not join audio");
+          const message =
+            err instanceof Error ? err.message : "Could not join audio";
+          setError(
+            // Worth naming, because it reads like a device fault and is not.
+            message.includes("UID_CONFLICT")
+              ? "Yeh seat already connected hai. Page refresh karo."
+              : message,
+          );
         }
       }
-    })();
+    });
 
     return () => {
       cancelled = true;
-      const track = localTrackRef.current;
-      localTrackRef.current = null;
-      agentTrackRef.current = null;
-      publishedRef.current = false;
 
-      if (track) {
-        track.stop();
-        track.close();
-      }
-      client?.removeAllListeners();
-      void client?.leave();
-      clientRef.current = null;
+      // Tear down on the same chain, so the next mount waits for this to finish
+      // rather than racing it.
+      void serialise(key, async () => {
+        const track = localTrackRef.current;
+        localTrackRef.current = null;
+        agentTrackRef.current = null;
+        publishedRef.current = false;
+
+        if (track) {
+          track.stop();
+          track.close();
+        }
+        client?.removeAllListeners();
+        try {
+          await client?.leave();
+        } catch {
+          // Already gone. Nothing to do.
+        }
+        clientRef.current = null;
+      });
+
       setJoined(false);
       setMicReady(false);
     };

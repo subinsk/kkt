@@ -303,6 +303,41 @@ export function allPeerMode(game: Game, peerMode: boolean) {
 /* Clock                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The wire the round opens on.
+ *
+ * Fixed rather than random, for the same reason the riddle bank is fixed: the
+ * run-through you rehearse has to be the run-through you demo. Red is the
+ * coconut riddle — the one everybody in the room already knows, which is the
+ * right way to open.
+ */
+export const OPENING_WIRE: WireColor = "red";
+
+/**
+ * Put a riddle on the table before the host opens his mouth.
+ *
+ * The host's greeting is spoken by TTS straight from `greeting_message`, with no
+ * LLM turn behind it — so if the opening question is going to be in that
+ * greeting, the wire has to be chosen *here*, on the server, before the agent
+ * joins. Idempotent: if a wire is already active this returns it untouched
+ * rather than re-announcing it.
+ */
+export function openRound(game: Game) {
+  if (game.activeWire) {
+    const wire = findWire(game, game.activeWire);
+    if (wire && wire.status !== "cut") {
+      return { wire, riddle: getRiddle(wire.riddleId) };
+    }
+  }
+
+  const first =
+    game.wires.find((w) => w.color === OPENING_WIRE && w.status !== "cut") ??
+    game.wires.find((w) => w.status !== "cut");
+  if (!first) return null;
+
+  return selectWire(game, first.color);
+}
+
 export function startGame(game: Game): Game {
   if (game.phase !== "lobby") return game;
   if (game.players.length === 0) throw new Error("No contestants have joined.");
@@ -322,6 +357,9 @@ export function startGame(game: Game): Game {
 
   game.phase = "running";
   game.startedAt = Date.now();
+  // Belt and braces: the agent route opens the round before the host greets, but
+  // a start that came from the host console alone must not leave the table bare.
+  openRound(game);
   emit(game, "game_started", {
     durationSeconds: game.durationSeconds,
     players: game.players.map((p) => ({ id: p.id, name: p.name, seat: p.seat })),

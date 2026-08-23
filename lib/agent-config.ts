@@ -11,23 +11,70 @@
  * likeness, no name-dropping.
  */
 
+import { WIRE_LABELS_HI, type WireColor } from "./game/state";
+
 export const AGENT_NAME = "amitabh-bhai";
 
+/**
+ * The bare greeting, used only by `/api/agent/start` — the channel smoke test,
+ * which has no room and therefore no wire to open on. Real rounds get
+ * `openingLine()` instead.
+ */
 export const GREETING =
   "Namaskaar! Aur swagat hai aap sabka — Kaun Katega Taarpati. Paanch taar, chhe minute. Ghadi shuru. Toh bataiye, pehla sawaal kis taar ka? Laal, neela, peela, hara, ya safed?";
 
 /**
- * The opening line, sized to the room.
+ * The opening line: who he is, the rules, and the first question — one utterance.
  *
- * The greeting is the one host line that is spoken before any LIVE STATE has
- * reached the model, so it is the one place the model cannot be told how many
- * people are out there. "Swagat hai aap sabka" to a single contestant is the
- * first thing an audience hears, so pick the wording here, on the server,
- * where the player list is already known.
+ * This is spoken by TTS straight from `greeting_message`, with no LLM turn
+ * behind it (verified 23 Aug 2026 — see docs/AGORA-NOTES.md), which is exactly
+ * why the whole opening lives here. The rules are the one part of the show that
+ * must come out the same way every time, and a model asked to "explain the
+ * rules briefly" will pick a different set of them at every rehearsal.
+ *
+ * It ends on the first riddle rather than on "which wire do you want?", so the
+ * round opens on a question instead of on a decision. The server has already
+ * selected that wire (`openRound`) before this string is built.
+ *
+ * Kept deliberately tight: every second of it is on the clock.
  */
-export function greetingFor(players: string[]): string {
-  if (players.length !== 1) return GREETING;
-  return `Namaskaar ${players[0]}! Swagat hai aapka — Kaun Katega Taarpati. Paanch taar, chhe minute, aur akele aap. Ghadi shuru. Toh bataiye ${players[0]}, pehla sawaal kis taar ka? Laal, neela, peela, hara, ya safed?`;
+export function openingLine(opts: {
+  players: string[];
+  wire: WireColor;
+  /** The riddle's Devanagari `speak` text, not the Roman `screen` text. */
+  riddle: string;
+}): string {
+  const colour = WIRE_LABELS_HI[opts.wire];
+  const solo = opts.players.length === 1;
+
+  const hello = solo
+    ? `Namaskaar ${opts.players[0]}! Main hoon Amitabh bhai, aur ye hai — Kaun Katega Taarpati!`
+    : "Namaskaar! Main hoon Amitabh bhai, aur ye hai — Kaun Katega Taarpati!";
+
+  /**
+   * The rules, in five lines.
+   *
+   * Every word here is on the clock — the countdown starts as this is spoken —
+   * so this list is a budget, not a script. What earns a place: the shape of the
+   * game, the win condition, that mistakes cost time, and how to be heard. What
+   * does not: the colour of every wire (they are on the panel and on the phone),
+   * and the exact penalty numbers, which he quotes anyway at the moment they
+   * matter — "hint chahiye? pandrah second lagenge."
+   */
+  const rules = [
+    "Niyam seedhe hain: paanch taar, paanch paheliyan, chhe minute.",
+    "Har sahi jawab ek taar kaat deta hai. Paanchon kat gaye, toh aap jeet gaye.",
+    "Galat jawab aur hint, dono waqt le jaate hain. Aur ek Phone a Friend aapke paas hai.",
+    // How to become audible at all. Solo contestants are already on air, so for
+    // them this line would be an instruction to fix something that is not broken.
+    solo
+      ? "Aapka mic khula hai — seedha bol dijiye."
+      : "Jawab dene ke liye phone pe On Air dabaiye. Aapas ki baat free hai.",
+  ].join(" ");
+
+  // Roman Hinglish up to here, then Devanagari for the riddle — riddles.ts
+  // explains why the riddle text specifically must not be Roman.
+  return `${hello} ${rules} Toh ghadi shuru! Aur pehla sawaal — ${colour} taar. ${opts.riddle}`;
 }
 
 export const SYSTEM_PROMPT = `You are Amitabh bhai, the host of a Hinglish TV quiz show called "Kaun Katega Taarpati". Anywhere from one to four contestants sit across a desk from you — LIVE STATE names exactly who is in the room, and a single contestant playing alone is a normal round, not a problem to comment on. Between you is a prop device with five coloured wires — laal, neela, peela, hara, safed — and a six-minute countdown. Each riddle they solve cuts one wire. Cut all five before the clock runs out and they win; run out and a confetti charge goes off and the office loses coffee-machine access for a week.
@@ -46,8 +93,12 @@ Every turn you receive a block titled LIVE STATE. That block is the truth. The c
 - Show-host warmth, real pauses, a little theatre. "Lock kiya jaye?" before anything irreversible.
 - If someone interrupts you, STOP talking immediately. Then: listen to what they actually said, acknowledge it in three or four words, tell them to hear the question out, and ask the question again from the start. In that order, every time. Something like: "Haan haan... ek minute. Pehle sawaal suniye." then re-ask it. Do not argue, do not carry on over them, and do not pretend you did not hear. If what they said was actually an answer, judge it instead of re-asking.
 
+# How the round opens
+- You have ALREADY spoken your opening: you introduced yourself, gave the rules in a few lines, and asked the first riddle — the one on the wire LIVE STATE shows as active. That happened before your first turn, so do not introduce yourself again, do not re-explain the rules unless somebody asks, and do not ask which wire they want to start on. It is chosen.
+- Your first actual turn is a reply to whatever they say about that first riddle. If they are quiet, wait. If they ask you to repeat the question, repeat it — free, no penalty.
+
 # Running the round
-- The contestants choose the wire order. Ask which colour they want; if they name one, call select_wire and then ask that wire's riddle. Never impose a sequence.
+- After the first wire, the contestants choose the order. Ask which colour they want; if they name one, call select_wire and then ask that wire's riddle. Never impose a sequence beyond the opening one.
 - Read the riddle from the tool result. Ask it once, clearly. Repeat it on request without penalty.
 - When someone answers, judge it by MEANING, never by spelling. "coconut", "nariyal", "naariyal", "wo brown wala fruit jo mandir mein chadhate hain" are all correct. Accents, ASR errors and half-words that clearly point at the right thing are correct. Be generous — a right answer rejected on a technicality is the worst thing that can happen in this game.
 - Correct answer: confirm the answer aloud, then call cut_wire with the colour and who answered. Celebrate briefly. Then ask which wire is next.

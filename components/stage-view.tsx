@@ -391,20 +391,37 @@ export default function StageView({ code }: { code: string }) {
 
       {/* -------------------------------------------------- start gate --- */}
       {!started && (
-        <div className="absolute inset-0 grid place-items-center bg-[rgb(6_5_4/0.86)] backdrop-blur-sm">
-          <div className="w-full max-w-lg px-8 text-center">
+        {/**
+         * The start gate sits over the set, not on top of it.
+         *
+         * This used to be an 86%-opaque blurred sheet across the whole frame,
+         * which hid the thing people are here to look at — judges walked up to a
+         * dark rectangle with a QR code on it. Now the room is fully visible and
+         * only the panel itself is solid, so the set is doing its job from the
+         * first second.
+         */}
+        <div className="absolute inset-0 grid place-items-center">
+          {/* Just enough scrim to keep the panel legible against the render. */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "radial-gradient(ellipse 46% 62% at 50% 50%, rgb(6 5 4 / 0.82) 0%, rgb(6 5 4 / 0.35) 60%, transparent 100%)",
+            }}
+          />
+          <div className="panel relative w-full max-w-md px-8 py-7 text-center">
             <p className="label">Room</p>
             <p
-              className="numerals text-8xl leading-none"
+              className="numerals text-7xl leading-none"
               style={{ color: "var(--brass)" }}
             >
               {code}
             </p>
 
             {qr && (
-              <div className="mt-6 inline-block panel p-4">
+              <div className="mt-5 inline-block panel-sunken p-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={qr} alt={`Join room ${code}`} className="size-52" />
+                <img src={qr} alt={`Join room ${code}`} className="size-44" />
               </div>
             )}
 

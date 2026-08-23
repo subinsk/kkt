@@ -22,6 +22,8 @@ import {
   pauseClock,
   recordWrongAnswer,
   resumeClock,
+  openRound,
+  OPENING_WIRE,
   selectWire,
   setPeerMode,
   startGame,
@@ -35,7 +37,7 @@ import {
   publicView,
 } from "../lib/game/state";
 import { riddleForWire } from "../lib/game/riddles";
-import { GREETING, greetingFor } from "../lib/agent-config";
+import { openingLine } from "../lib/agent-config";
 
 let passed = 0;
 let failed = 0;
@@ -129,6 +131,11 @@ throws("an empty room still cannot start", () =>
 startGame(soloGame);
 check("one contestant is enough to start", soloGame.phase === "running");
 check(
+  "starting opens on a wire rather than an empty table",
+  soloGame.activeWire === OPENING_WIRE,
+  `active: ${soloGame.activeWire}`,
+);
+check(
   "the solo contestant is on air, not in peer talk",
   livePlayers(soloGame).length === 1,
   `live: ${livePlayers(soloGame).length}`,
@@ -144,13 +151,48 @@ check(
   "a solo contestant can still mute themselves",
   livePlayers(soloGame).length === 0,
 );
+const reopened = openRound(soloGame);
 check(
-  "the greeting names a lone contestant",
-  greetingFor(["Nikhil"]).includes("Nikhil"),
+  "opening the round twice does not move the question",
+  reopened?.wire.color === OPENING_WIRE,
 );
 check(
-  "a group still gets the group greeting",
-  greetingFor(["Nikhil", "Priya"]) === GREETING,
+  "the opening wire has a speakable riddle",
+  (reopened?.riddle?.speak ?? "").length > 0,
+);
+/**
+ * A budget, not a style note. The countdown starts as this line is spoken, so
+ * every word added to the opening is a word taken off the round — and an
+ * opening that quietly grew to fifty seconds is a fifth of the game gone with
+ * nothing on screen to show it.
+ */
+const openingWords = openingLine({
+  players: ["Rahul", "Priya", "Amit"],
+  wire: "red",
+  riddle: riddleForWire("red").speak,
+}).split(/\s+/).length;
+check(
+  "the opening stays inside its clock budget",
+  openingWords <= 80,
+  `${openingWords} words — roughly ${Math.round(openingWords / 2.3)}s of the 360s round`,
+);
+check(
+  "the opening line names a lone contestant",
+  openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(
+    "Nikhil",
+  ),
+);
+check(
+  "a solo contestant is not told to press On Air",
+  !openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(
+    "On Air",
+  ),
+);
+check(
+  "a group is told how to become audible",
+  openingLine({ players: ["Nikhil", "Priya"], wire: "red", riddle: "R" }).includes(
+    "On Air",
+  ),
 );
 
 
