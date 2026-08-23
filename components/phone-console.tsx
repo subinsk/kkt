@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRoom, formatClock } from "@/lib/use-room";
+import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
 import { SEAT_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
 import { StageCanvas } from "@/components/stage/stage-canvas";
@@ -256,7 +257,7 @@ function JoinForm({
 /* -------------------------------------------------------------------------- */
 
 function Console({ code, session }: { code: string; session: Joined }) {
-  const { game, connected, onEvent, act } = useRoom(code);
+  const { game, connected, missing, onEvent, act } = useRoom(code);
   const [peerMode, setPeerMode] = useState(true);
   const [pending, setPending] = useState(false);
   const [hostSaid, setHostSaid] = useState<string | null>(null);
@@ -438,6 +439,9 @@ function Console({ code, session }: { code: string; session: Joined }) {
    * Derived from game state rather than from the `game_over` event, so a phone
    * that reloads, or joins late, still shows the right numbers.
    */
+  // The server has forgotten this room. Everything below is stale.
+  if (missing) return <RoomGone code={code} />;
+
   if (roundOver && game) {
     return (
       <Summary

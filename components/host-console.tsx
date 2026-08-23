@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRoom, formatClock } from "@/lib/use-room";
+import { RoomGone } from "@/components/room-gone";
 import { StageCanvas } from "@/components/stage/stage-canvas";
 import { useAgora, type AgoraCredentials } from "@/lib/use-agora";
 import { WIRE_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
@@ -121,6 +122,9 @@ export default function HostConsole({ code }: { code: string }) {
       </main>
     );
   }
+
+  // The server has forgotten this room; everything below would be stale.
+  if (missing) return <RoomGone code={code} />;
 
   const panic = game.secondsLeft <= 60 && game.phase === "running";
 

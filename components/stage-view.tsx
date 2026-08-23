@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { StageCanvas } from "./stage/stage-canvas";
 import { useRoom, formatClock } from "@/lib/use-room";
+import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
 import { WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
 
@@ -325,6 +326,9 @@ export default function StageView({ code }: { code: string }) {
 
   return (
     <main className="relative h-dvh w-dvw overflow-hidden bg-[var(--ink)]">
+      {/* The room is gone but state is stale — say so over everything. */}
+      {missing && <RoomGone code={code} />}
+
       {/* ---------------------------------------------------------- 3D --- */}
       <StageCanvas
         game={game}
