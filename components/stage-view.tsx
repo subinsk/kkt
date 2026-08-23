@@ -168,19 +168,22 @@ export default function StageView({ code }: { code: string }) {
       if (spectator.error) throw new Error(spectator.error);
       setCredentials(spectator as AgoraCredentials);
 
-      const agent = await fetch(`/api/room/${code}/agent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start" }),
-      }).then((r) => r.json());
-      if (agent.error) throw new Error(agent.error);
-
       await fetch(`/api/room/${code}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "start" }),
       });
 
+      /**
+       * The host is NOT started here — see the effect below.
+       *
+       * His opening line is spoken the moment he joins the channel, with no LLM
+       * turn behind it. Starting him now would have him greet a channel this
+       * projector has not finished subscribing to, so the introduction and the
+       * first riddle are simply lost — and twenty seconds later the silence
+       * prompt fires instead, which is the stray line that sounds like the host
+       * malfunctioning.
+       */
       setStarted(true);
     } catch (err) {
       setNote(err instanceof Error ? err.message : "Could not start");
@@ -188,6 +191,29 @@ export default function StageView({ code }: { code: string }) {
       setStarting(false);
     }
   }, [code]);
+
+  /**
+   * Bring the host in only once this projector is subscribed and listening.
+   *
+   * `agora.joined` is the guarantee that the greeting has an audience. Guarded by
+   * a ref so a re-render cannot start a second agent.
+   */
+  const hostRequested = useRef(false);
+  useEffect(() => {
+    if (!started || !agora.joined || hostRequested.current) return;
+    hostRequested.current = true;
+
+    void fetch(`/api/room/${code}/agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start" }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) setNote(String(d.error));
+      })
+      .catch((err) => setNote(err instanceof Error ? err.message : "Host nahi aaya"));
+  }, [started, agora.joined, code]);
 
   /** Chyron copy, driven off the event feed. */
   useEffect(

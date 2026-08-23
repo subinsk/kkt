@@ -260,10 +260,12 @@ export function buildAgentProperties(opts: {
       enable_metrics: true,
       enable_error_message: true,
       silence_config: {
-        timeout_ms: 20000,
+        // Long enough that thinking is not treated as a problem — a riddle takes
+        // a while, and interrupting that is worse than a pause.
+        timeout_ms: 25000,
         action: "think",
         content:
-          "Nobody has spoken for a while. Prod them by name, in four words or fewer. Mention the clock.",
+          "Nobody has answered for a while. Follow your escalation ladder: nudge by name, then rephrase the riddle, then offer the hint with its cost, then offer to park the wire. Pick the NEXT step you have not used yet on this wire, do exactly that one thing in Devanagari, in one short sentence, and stop. Do not greet, do not re-introduce the show, do not start a new riddle.",
       },
     },
   };
