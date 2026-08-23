@@ -29,6 +29,7 @@ import {
   type WireColor,
 } from "./state";
 import { getRiddle, riddleForWire } from "./riddles";
+import { LIFELINE_LINES, hostSay } from "./host-speak";
 
 type Subscriber = (event: GameEvent) => void;
 
@@ -633,6 +634,9 @@ export function lifelineAnswered(game: Game) {
   game.lifeline.status = "connected";
   game.lifeline.penaltyApplied = true;
   adjustClock(game, PENALTY_LIFELINE, "phone a friend connected");
+  // Acknowledge it out loud, then say nothing until the call ends — the proxy
+  // enforces the silence.
+  hostSay(game.code, LIFELINE_LINES.connected);
   emit(game, "lifeline_connected", {
     playerId: game.lifeline.activeFor,
     seconds: PENALTY_LIFELINE,
@@ -643,6 +647,9 @@ export function lifelineEnded(game: Game) {
   const playerId = game.lifeline.activeFor;
   game.lifeline.status = "done";
   game.lifeline.activeFor = null;
+  // Hand the floor back and ask what they got — the whole point of the lifeline
+  // is that they relay it to the room.
+  hostSay(game.code, LIFELINE_LINES.ended);
   emit(game, "lifeline_ended", { playerId });
 }
 
@@ -669,6 +676,8 @@ export function lifelineFailed(game: Game, reason: string) {
     requestedBy: null,
   };
 
+  // Requirement #9 out loud: the failure is stated, not hidden.
+  hostSay(game.code, LIFELINE_LINES.failed);
   emit(game, "lifeline_failed", { playerId, reason, refunded: true });
 }
 

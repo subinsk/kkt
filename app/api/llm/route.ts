@@ -184,6 +184,36 @@ export async function POST(request: Request) {
           return;
         }
 
+        /**
+         * The host is silent while a lifeline call is live.
+         *
+         * Enforced here rather than asked for in the prompt, because the silence
+         * timer fires every few seconds: across a forty-five second call that is
+         * a dozen prompts, and any one of them talking over the friend reading
+         * the hint ruins the beat. The connecting and closing lines are spoken
+         * deterministically from the webhooks instead.
+         *
+         * Returning empty rather than refusing keeps Agora happy — it gets a
+         * well-formed completion with nothing in it, and says nothing.
+         */
+        if (game.lifeline.status === "connected") {
+          controller.enqueue(
+            sse(chunk(id, model, { role: "assistant", content: "" })),
+          );
+          controller.enqueue(
+            sse({
+              id,
+              object: "chat.completion.chunk",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            }),
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+          return;
+        }
+
         // Appended rather than unshifted: recency wins with every model, and
         // the standing persona prompt is already at position zero.
         messages.push({ role: "system", content: buildLiveState(game) });
