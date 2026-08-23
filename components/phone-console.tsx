@@ -54,15 +54,54 @@ function JoinForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** Indian mobile: ten digits, ignoring spaces, dashes and a leading +91. */
-  const digits = phone.replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
+  /**
+   * Refs alongside state, because of autofill.
+   *
+   * A browser filling these in does not reliably fire React's `onChange`, so
+   * state can still be empty while the fields visibly contain a name and a
+   * number. Gating the button on state then leaves the contestant staring at a
+   * dead button with their details already on screen — which is exactly what
+   * happened.
+   *
+   * So: state drives the live feedback, the refs are the truth on submit, and
+   * the button is never disabled on validity. Validation happens when they
+   * press it and says what is wrong.
+   */
+  const nameRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+
+  /** Ten digits, ignoring spaces, dashes, a leading +91, and a leading zero. */
+  const normalise = (raw: string) =>
+    raw
+      .replace(/\D/g, "")
+      .replace(/^0+/, "")
+      .replace(/^91(?=\d{10}$)/, "");
+
+  const digits = normalise(phone);
   const phoneOk = digits.length === 10;
   const nameOk = name.trim().length > 0;
-  const ready = nameOk && phoneOk && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!ready) return;
+    if (busy) return;
+
+    // Read the DOM, so an autofilled value counts even if onChange never fired.
+    const liveName = (nameRef.current?.value ?? name).trim();
+    const liveDigits = normalise(phoneRef.current?.value ?? phone);
+
+    if (!liveName) {
+      setError("Naam likhiye.");
+      nameRef.current?.focus();
+      return;
+    }
+    if (liveDigits.length !== 10) {
+      setError(
+        `Das digit ka mobile number chahiye — abhi ${liveDigits.length} hai.`,
+      );
+      phoneRef.current?.focus();
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
@@ -71,7 +110,11 @@ function JoinForm({
         headers: { "Content-Type": "application/json" },
         // The number is required now, so entering it *is* the consent — the
         // notice below the field says so in as many words.
-        body: JSON.stringify({ name, phone: digits, consent: true }),
+        body: JSON.stringify({
+          name: (nameRef.current?.value ?? name).trim(),
+          phone: normalise(phoneRef.current?.value ?? phone),
+          consent: true,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not join");
@@ -105,8 +148,12 @@ function JoinForm({
             </label>
             <input
               id="name"
-              value={name}
+              ref={nameRef}
+              // Uncontrolled: autofill and IME both write straight to the DOM,
+              // and `defaultValue` keeps React from fighting them.
+              defaultValue={name}
               onChange={(e) => setName(e.target.value)}
+              onInput={(e) => setName((e.target as HTMLInputElement).value)}
               required
               maxLength={24}
               autoComplete="given-name"
@@ -122,8 +169,10 @@ function JoinForm({
             </label>
             <input
               id="phone"
-              value={phone}
+              ref={phoneRef}
+              defaultValue={phone}
               onChange={(e) => setPhone(e.target.value)}
+              onInput={(e) => setPhone((e.target as HTMLInputElement).value)}
               required
               inputMode="numeric"
               autoComplete="tel"
@@ -161,7 +210,7 @@ function JoinForm({
 
           <button
             type="submit"
-            disabled={!ready}
+            disabled={busy}
             className="btn btn-brass w-full py-4 text-base"
           >
             {busy ? "Baith rahe hain…" : "Seat le lo"}
