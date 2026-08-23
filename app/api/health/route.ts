@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isSet, optional } from "@/lib/env";
+import { isSet, optional, resolvePublicBase } from "@/lib/env";
 import { RIDDLES } from "@/lib/game/riddles";
 import { listGames } from "@/lib/game/store";
 import { existsSync } from "node:fs";
@@ -33,10 +33,13 @@ export async function GET() {
     vobiz_auth_id: isSet("VOBIZ_AUTH_ID"),
     vobiz_auth_token: isSet("VOBIZ_AUTH_TOKEN"),
     vobiz_from_number: isSet("VOBIZ_FROM_NUMBER"),
-    public_base_url: isSet("PUBLIC_BASE_URL"),
+    public_base_url: Boolean(resolvePublicBase().url),
   };
 
-  const publicBase = optional("PUBLIC_BASE_URL", "");
+  // Not read straight from PUBLIC_BASE_URL: on Render and Vercel the host
+  // supplies it, so checking only the explicit var would report a blocking
+  // failure on a deployment that is in fact fine.
+  const { url: publicBase, source: publicBaseSource } = resolvePublicBase();
   const audioDir = join(process.cwd(), "public", "audio");
 
   // Checked on disk rather than trusted, because a missing file here is
@@ -66,7 +69,9 @@ export async function GET() {
   if (!keys.sarvam) blocking.push("SARVAM_API_KEY is not set — no voice at all.");
   if (!keys.llm) blocking.push("LLM_API_KEY is not set — the host cannot think.");
   if (!keys.public_base_url) {
-    blocking.push("PUBLIC_BASE_URL is not set — Agora cannot reach /api/llm.");
+    blocking.push(
+      "No public base URL — Agora cannot reach /api/llm. Set PUBLIC_BASE_URL (it is derived automatically on Render and Vercel).",
+    );
   } else if (publicBase.includes("localhost") || publicBase.includes("127.0.0.1")) {
     blocking.push(
       "PUBLIC_BASE_URL points at localhost, which is invisible to Agora and Vobiz. Start a tunnel.",
@@ -114,6 +119,9 @@ export async function GET() {
       asr_language: optional("SARVAM_ASR_LANGUAGE", "unknown"),
     },
     publicBaseUrl: publicBase || null,
+    // Which variable won. The most useful line in this payload when the
+    // host speaks locally but not deployed, or vice versa.
+    publicBaseSource,
     audio: { hints: hintAudio, outcome: outcomeAudio },
     riddles: RIDDLES.map((r) => ({ wire: r.wire, id: r.id })),
     liveRooms: listGames().map((g) => ({

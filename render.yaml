@@ -28,11 +28,18 @@ services:
       - key: NODE_VERSION
         value: "22"
 
-      # PUBLIC_BASE_URL must be this service's own https URL once it exists.
-      # Agora fetches /api/llm from it and Vobiz fetches the answer_url, so a
-      # wrong value here is silent: no voice, and dead air on the lifeline.
-      - key: PUBLIC_BASE_URL
-        sync: false
+      # PUBLIC_BASE_URL is deliberately NOT listed.
+      #
+      # Render sets RENDER_EXTERNAL_URL to this service's own https URL, at both
+      # build and run time, and resolvePublicBase() in lib/env.ts falls back to
+      # it. So the deploy-then-set-the-URL-then-redeploy step is gone, along
+      # with the silent failure it caused: Agora fetches /api/llm from this
+      # origin and Vobiz fetches the answer_url, and a wrong value is dead air
+      # rather than an error.
+      #
+      # Add PUBLIC_BASE_URL in the dashboard ONLY to override — a custom domain,
+      # or pointing this service at a cloudflared tunnel during a rehearsal. It
+      # takes precedence when set.
 
       - key: NEXT_PUBLIC_AGORA_APP_ID
         sync: false

@@ -2,7 +2,7 @@ import { XML_HEADERS, hintLoopXml, simpleSpeakXml } from "@/lib/vobiz";
 import { attachCallUuid, findCall } from "@/lib/game/lifeline";
 import { getGame, lifelineAnswered } from "@/lib/game/store";
 import { hintAudioPath } from "@/lib/game/riddles";
-import { required } from "@/lib/env";
+import { publicBaseUrl } from "@/lib/env";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { WireColor } from "@/lib/game/state";
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const base = required("PUBLIC_BASE_URL").replace(/\/$/, "");
+  const base = publicBaseUrl();
   return new Response(
     hintLoopXml({ audioUrl: `${base}${relative}`, windowSeconds: 45, gapSeconds: 3 }),
     { headers: XML_HEADERS },

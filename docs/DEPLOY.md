@@ -1,9 +1,29 @@
 # Deploying
 
+## Live deployments
+
+| | URL | |
+|---|---|---|
+| **Render** | <https://kaun-katega-taarpati.onrender.com> | The one to demo. One long-lived Node process, so rooms and the SSE stream actually work. Free tier — spins down after ~15 min idle, so hit it once before showing anyone. |
+| **Vercel** | <https://kkt-omega.vercel.app/> | Serverless. The UI loads and the set renders, but for the reasons below a room does not survive between requests. Treat it as a shop window, not a playable build. |
+
+**These two do not talk to each other.** They are independent copies of the same
+app, each with its own memory and its own env. Nothing in the code points one at
+the other, and there is no state shared between them — a room started on Render
+does not exist on Vercel.
+
+The URL each one needs is *its own*, because the inbound traffic comes from
+elsewhere: Agora's cloud fetches `/api/llm` and Vobiz's cloud fetches the
+`answer_url` and the hint `.wav`. That is what `PUBLIC_BASE_URL` is for, and
+[`lib/env.ts`](../lib/env.ts) now derives it from the host, so there is nothing
+to paste in. See [Wiring the public URL](#wiring-the-public-url).
+
 ## The one thing to know first
 
-**This app cannot run on Vercel, Netlify, or Cloudflare Workers.** Not a
-preference — it is architecturally incompatible with serverless:
+**This app cannot run a *game* on Vercel, Netlify, or Cloudflare Workers.**
+Not a preference — it is architecturally incompatible with serverless. The
+Vercel deploy above builds and serves pages; it is the stateful half that
+breaks:
 
 | What | Why serverless breaks it |
 |---|---|
@@ -67,14 +87,13 @@ VOBIZ_AUTH_ID                 VOBIZ_AUTH_TOKEN
 VOBIZ_FROM_NUMBER             FALLBACK_FRIEND_NUMBER
 ```
 
-**4.** Deploy, then **set `PUBLIC_BASE_URL` to the service's own URL** —
-`https://kaun-katega-taarpati.onrender.com` — and redeploy.
+**4.** Deploy. **`PUBLIC_BASE_URL` needs no second pass** — Render sets
+`RENDER_EXTERNAL_URL` to the service's own https URL and the app falls back to
+it. Set `PUBLIC_BASE_URL` in the dashboard only to override, e.g. a custom
+domain.
 
-This trips everyone: `PUBLIC_BASE_URL` is how Agora finds `/api/llm` and how
-Vobiz finds the `answer_url`. It cannot be known until the service exists, so it
-is always a second pass. Leave it wrong and you get a silent, voiceless game.
-
-**5.** Open `/api/health`. Green means go.
+**5.** Open `/api/health`. Green means go — and check `publicBaseSource` reads
+`RENDER_EXTERNAL_URL`.
 
 ### Free tier limits, honestly
 
@@ -96,6 +115,47 @@ no Node runtime for `agora-token`.
 
 ---
 
+## Wiring the public URL
+
+The only piece of config that is about *where this app lives*, and the one that
+has historically been set wrong. It is not a URL for one deployment to reach
+another — it is how the two external clouds reach whichever copy is serving.
+
+Three things are built from it, in [`lib/env.ts`](../lib/env.ts):
+
+| Built from it | Fetched by | If wrong |
+|---|---|---|
+| `llm.url` → `/api/llm` ([`lib/agora-rest.ts`](../lib/agora-rest.ts)) | Agora, every turn | The host never speaks. No error. |
+| `answer_url`, `ring_url`, `hangup_url` ([`lib/game/lifeline.ts`](../lib/game/lifeline.ts)) | Vobiz, on call events | The phone rings into silence. |
+| `/audio/hints/<wire>_h1.wav` | Vobiz `<Play>` | 45 seconds of dead air — Vobiz skips audio it cannot fetch, without erroring. |
+
+`resolvePublicBase()` picks the first of these that is set:
+
+| Order | Variable | Where it comes from |
+|---|---|---|
+| 1 | `PUBLIC_BASE_URL` | You. The only option locally, and the override anywhere. |
+| 2 | `RENDER_EXTERNAL_URL` | Render, automatically. Full URL, scheme included. |
+| 3 | `VERCEL_PROJECT_PRODUCTION_URL` | Vercel, automatically. Hostname only, so `https://` is prepended. |
+
+So, concretely, what to set where:
+
+| Where you are running | What to add |
+|---|---|
+| Local (`npm run dev`) | `PUBLIC_BASE_URL` in `.env.local` — your cloudflared URL. Required; nothing can derive a tunnel. |
+| Render | **Nothing.** Derived. Add `PUBLIC_BASE_URL` only for a custom domain. |
+| Vercel | **Nothing**, provided *Settings → Environment Variables → Enable access to System Environment Variables* is ticked. Otherwise add `PUBLIC_BASE_URL=https://kkt-omega.vercel.app`. |
+
+Two notes on the Vercel side. `VERCEL_PROJECT_PRODUCTION_URL` is used rather than
+`VERCEL_URL` deliberately: `VERCEL_URL` is per-deployment and changes on every
+push, so a preview deploy would hand Agora a URL that is already stale. And if
+Deployment Protection is on, the Vercel deploy cannot work regardless of the URL
+— Agora and Vobiz arrive unauthenticated and get the auth wall.
+
+`/api/health` reports `publicBaseSource`, so you can see which of the three won
+without guessing.
+
+---
+
 ## Pre-demo checklist
 
 ```bash
@@ -106,7 +166,8 @@ npm run render:audio   # hint clips + outcome stingers
 then `/api/health` and confirm:
 
 - [ ] `ready: true`, no blocking items
-- [ ] `PUBLIC_BASE_URL` is the URL actually in use *right now*
+- [ ] `publicBaseUrl` in `/api/health` is the origin actually in use *right now*,
+      and `publicBaseSource` is the variable you expect
 - [ ] 5/5 hint clips, 2/2 stingers
 - [ ] One hint clip opens in a browser at the public URL
 - [ ] One test Vobiz call has rung a real handset today

@@ -1,4 +1,4 @@
-import { appId as agoraAppId, optional, required } from "./env";
+import { appId as agoraAppId, optional, publicBaseUrl, required } from "./env";
 
 /**
  * Thin wrapper over the Conversational AI Engine REST API.
@@ -94,7 +94,7 @@ export function buildAgentProperties(opts: {
   systemPrompt: string;
   greeting: string;
 }) {
-  const baseUrl = required("PUBLIC_BASE_URL").replace(/\/$/, "");
+  const baseUrl = publicBaseUrl();
 
   return {
     channel: opts.channel,

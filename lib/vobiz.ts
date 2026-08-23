@@ -1,4 +1,4 @@
-import { optional, required } from "./env";
+import { optional, publicBaseUrl, required } from "./env";
 
 /**
  * Vobiz: carrier-grade PSTN, and the second leg of the system. Agora carries
@@ -137,7 +137,7 @@ export const XML_HEADERS = { "Content-Type": "application/xml; charset=utf-8" };
 
 /** Where Vobiz should call us back. Must be publicly reachable. */
 export function publicUrl(path: string): string {
-  return `${required("PUBLIC_BASE_URL").replace(/\/$/, "")}${path}`;
+  return `${publicBaseUrl()}${path}`;
 }
 
 export const FALLBACK_FRIEND = () => optional("FALLBACK_FRIEND_NUMBER", "");

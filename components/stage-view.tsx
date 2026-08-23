@@ -441,12 +441,6 @@ export default function StageView({ code }: { code: string }) {
                 {note}
               </p>
             )}
-            <p
-              className="mt-4 text-xs"
-              style={{ color: "var(--cream-faint)" }}
-            >
-              Is click par outcome audio unlock hota hai — isliye zaroori hai.
-            </p>
           </div>
         </div>
       )}

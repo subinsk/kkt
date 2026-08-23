@@ -24,6 +24,58 @@ export function isSet(name: string): boolean {
 }
 
 /**
+ * The origin that Agora's and Vobiz's clouds use to reach *this* process.
+ *
+ * Not a link to another deployment — every deployment resolves this to its own
+ * URL. Three things are built from it and all three fail silently if it is
+ * wrong: `llm.url` (Agora fetches it every turn), the Vobiz
+ * answer/ring/hangup webhooks, and the hint .wav that `<Play>` fetches.
+ *
+ * `PUBLIC_BASE_URL` wins when set, because a cloudflared tunnel or a custom
+ * domain cannot be derived. Otherwise the host tells us who we are, which
+ * removes the deploy-then-set-it-then-redeploy step that is this project's
+ * single most repeated mistake:
+ *
+ *   - `RENDER_EXTERNAL_URL` — Render, full URL including the scheme.
+ *   - `VERCEL_PROJECT_PRODUCTION_URL` — Vercel, hostname only, so https:// is
+ *     added. The stable production domain, deliberately not `VERCEL_URL`,
+ *     which is per-deployment and changes on every push. Requires "Enable
+ *     access to System Environment Variables" in project settings.
+ *
+ * Both verified against vendor docs 23 Aug 2026.
+ */
+export function resolvePublicBase(): { url: string; source: string } {
+  const trim = (v: string) => v.replace(/\/$/, "");
+
+  const explicit = process.env.PUBLIC_BASE_URL;
+  if (explicit) return { url: trim(explicit), source: "PUBLIC_BASE_URL" };
+
+  const render = process.env.RENDER_EXTERNAL_URL;
+  if (render) return { url: trim(render), source: "RENDER_EXTERNAL_URL" };
+
+  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (vercel) {
+    return {
+      url: `https://${trim(vercel)}`,
+      source: "VERCEL_PROJECT_PRODUCTION_URL",
+    };
+  }
+
+  return { url: "", source: "unset" };
+}
+
+/** `resolvePublicBase()`, with no trailing slash, throwing if nothing resolves. */
+export function publicBaseUrl(): string {
+  const { url } = resolvePublicBase();
+  if (!url) {
+    throw new Error(
+      "No public base URL. Set PUBLIC_BASE_URL (locally: npx cloudflared tunnel --url http://localhost:3000). On Render and Vercel this is normally derived from the host automatically.",
+    );
+  }
+  return url;
+}
+
+/**
  * The App ID, which both the browser and the server need.
  *
  * `NEXT_PUBLIC_AGORA_APP_ID` is the canonical name because only a NEXT_PUBLIC_

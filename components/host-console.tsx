@@ -185,14 +185,14 @@ export default function HostConsole({ code }: { code: string }) {
                 onClick={() => setResetToken((n) => n + 1)}
                 title="Drag to orbit · scroll to zoom · right-drag to pan"
               >
-                reset cam
+                Reset camera
               </button>
               <button
                 className="label-dim hover:text-[var(--brass)]"
                 onClick={() => setMinimal((m) => !m)}
                 title="Strip shadows and particles if the framerate suffers"
               >
-                {minimal ? "minimal ✓" : "minimal"}
+                {minimal ? "Simple view ✓" : "Simple view"}
               </button>
             </div>
           </div>
@@ -430,8 +430,7 @@ export default function HostConsole({ code }: { code: string }) {
               className="mt-3 text-xs"
               style={{ color: "var(--cream-faint)" }}
             >
-              Force-cut credits the last attributed speaker. Use it when the
-              semantic judge is being too strict about a right answer.
+              Cut credits whoever spoke last.
             </p>
           </section>
 
@@ -460,7 +459,7 @@ export default function HostConsole({ code }: { code: string }) {
                   disabled={busy !== null}
                   onClick={() => agent("interrupt")}
                 >
-                  Interrupt (shut him up)
+                  Interrupt
                 </button>
               </div>
               <SpeakBox onSpeak={(text) => agent("speak", { text })} />
@@ -627,13 +626,13 @@ export default function HostConsole({ code }: { code: string }) {
                   {String(e.seq).padStart(3, "0")}
                 </span>
                 <span style={{ color: "var(--brass)" }} className="w-44 shrink-0">
-                  {e.type}
+                  {e.type.replace(/_/g, " ")}
                 </span>
                 <span
                   className="truncate"
                   style={{ color: "var(--cream-dim)" }}
                 >
-                  {JSON.stringify(e.payload)}
+                  {summarise(e.payload)}
                 </span>
               </div>
             ))}
@@ -642,6 +641,18 @@ export default function HostConsole({ code }: { code: string }) {
       </div>
     </main>
   );
+}
+
+/**
+ * The log is scanned at a glance by someone who is also talking to a room, so
+ * the payload renders as `key value` pairs. Braces and quote marks are noise at
+ * that reading speed, and nested objects are never the thing being looked for.
+ */
+function summarise(payload: Record<string, unknown>): string {
+  return Object.entries(payload ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => (typeof v === "object" ? k : `${k} ${String(v)}`))
+    .join("  ·  ");
 }
 
 const WIRE_HEX: Record<WireColor, string> = {

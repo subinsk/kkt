@@ -17,7 +17,7 @@ import { makeCall } from "../vobiz";
 import { hintAudioPath } from "./riddles";
 import { PENALTY_LIFELINE, findPlayer, type Game } from "./state";
 import { beginLifeline, emit, lifelineFailed } from "./store";
-import { optional, required } from "../env";
+import { optional, publicBaseUrl } from "../env";
 
 /** Correlates the Vobiz webhooks back to the room that placed the call. */
 export type LifelineCall = {
@@ -97,7 +97,7 @@ export async function startLifeline(game: Game, playerId: string) {
     createdAt: Date.now(),
   });
 
-  const base = required("PUBLIC_BASE_URL").replace(/\/$/, "");
+  const base = publicBaseUrl();
 
   try {
     const result = await makeCall({
@@ -151,6 +151,6 @@ export async function startLifeline(game: Game, playerId: string) {
 
 /** The MP3 the call loops — pre-rendered, so there is no dial-time latency. */
 export function hintAudioUrl(wire: string): string {
-  const base = required("PUBLIC_BASE_URL").replace(/\/$/, "");
+  const base = publicBaseUrl();
   return `${base}${hintAudioPath(wire as never)}`;
 }

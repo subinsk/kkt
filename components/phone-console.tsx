@@ -304,6 +304,28 @@ function Console({ code, session }: { code: string; session: Joined }) {
     }
   }
 
+  /**
+   * Once the round ends, this handset stops being a control surface and becomes
+   * a scoreboard — spec §10.4.
+   *
+   * Per-phone rather than a shared screen because the interesting number is
+   * *personal*: "you cut two of the five" is a different sentence for each
+   * contestant, and it is the one they will screenshot.
+   *
+   * Derived from game state rather than from the `game_over` event, so a phone
+   * that reloads, or joins late, still shows the right numbers.
+   */
+  if (roundOver && game) {
+    return (
+      <Summary
+        game={game}
+        playerId={session.player.id}
+        playerName={session.player.name}
+        seatColor={seatColor}
+      />
+    );
+  }
+
   return (
     <main
       className="relative min-h-dvh scanlines transition-colors duration-300"
@@ -546,6 +568,167 @@ function Console({ code, session }: { code: string; session: Joined }) {
         )}
       </div>
     </main>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Post-game summary                                                          */
+/* -------------------------------------------------------------------------- */
+
+function Summary({
+  game,
+  playerId,
+  playerName,
+  seatColor,
+}: {
+  game: NonNullable<ReturnType<typeof useRoom>["game"]>;
+  playerId: string;
+  playerName: string;
+  seatColor: string;
+}) {
+  const won = game.phase === "won";
+  const cutByMe = game.wires.filter((w) => w.cutBy === playerId).length;
+  const cutTotal = game.wires.filter((w) => w.status === "cut").length;
+  const remaining = game.wires.filter((w) => w.status !== "cut");
+
+  const board = game.players
+    .map((p) => ({
+      ...p,
+      cuts: game.wires.filter((w) => w.cutBy === p.id).length,
+    }))
+    .sort((a, b) => b.cuts - a.cuts);
+
+  return (
+    <main className="relative min-h-dvh scanlines">
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-1"
+        style={{
+          background: won ? "var(--signal-green)" : "var(--signal-red)",
+          boxShadow: `0 0 16px ${
+            won ? "var(--signal-green)" : "var(--signal-red)"
+          }`,
+        }}
+      />
+
+      <div className="mx-auto max-w-md px-5 pb-10 pt-8">
+        <p className="label">Room {game.code} · Round khatam</p>
+
+        <h1
+          className="display mt-2 text-6xl uppercase leading-none"
+          style={{ color: won ? "var(--signal-green)" : "var(--signal-red)" }}
+        >
+          {won ? "Defused" : "Phat gaya"}
+        </h1>
+
+        <p className="mt-3 text-lg" style={{ color: "var(--cream-dim)" }}>
+          {won
+            ? `Shabaash ${playerName}! Paanch mein se paanch.`
+            : `Ghadi jeet gayi, ${playerName}. Agli baar.`}
+        </p>
+
+        {/* The personal line — the reason this lives on a phone and not a wall. */}
+        <section className="panel mt-6 p-5">
+          <p className="label mb-1">Aapne kaate</p>
+          <p
+            className="display text-5xl leading-none"
+            style={{ color: seatColor }}
+          >
+            {cutByMe}
+            <span className="text-2xl" style={{ color: "var(--cream-faint)" }}>
+              {" "}
+              / {cutTotal} taar
+            </span>
+          </p>
+          {cutByMe === 0 && (
+            <p className="mt-2 text-xs" style={{ color: "var(--cream-faint)" }}>
+              Koi baat nahi — team ka kaam team ne kiya.
+            </p>
+          )}
+        </section>
+
+        <section className="mt-3 grid grid-cols-2 gap-3">
+          <Stat
+            label={won ? "Bacha time" : "Time survive"}
+            value={formatClock(game.secondsLeft)}
+          />
+          <Stat label="Hints liye" value={String(game.hintsUsed)} />
+          <Stat label="Galat jawab" value={String(game.wrongAnswers)} />
+          <Stat
+            label="Phone a friend"
+            value={game.lifeline.used ? "Use hui" : "Bach gayi"}
+          />
+        </section>
+
+        {!won && remaining.length > 0 && (
+          <section className="panel mt-3 p-4">
+            <p className="label mb-2">Ye taar bache the</p>
+            <div className="flex flex-wrap gap-2">
+              {remaining.map((w) => (
+                <span
+                  key={w.color}
+                  className="border px-2.5 py-1 text-sm"
+                  style={{ borderColor: WIRE_HEX[w.color as WireColor] }}
+                >
+                  {WIRE_LABELS_HI[w.color as WireColor]}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {game.players.length > 1 && (
+          <section className="panel mt-3 p-4">
+            <p className="label mb-3">Scoreboard</p>
+            <div className="space-y-2">
+              {board.map((p) => (
+                <div key={p.id} className="flex items-center gap-3">
+                  <span
+                    className="block size-2.5 shrink-0"
+                    style={{ background: p.color }}
+                  />
+                  <span
+                    className="display text-xl uppercase leading-none"
+                    style={{
+                      color:
+                        p.id === playerId ? "var(--cream)" : "var(--cream-dim)",
+                    }}
+                  >
+                    {p.name}
+                    {p.id === playerId && <span className="label ml-2">aap</span>}
+                  </span>
+                  <span
+                    className="numerals ml-auto text-xl"
+                    style={{
+                      color: p.cuts > 0 ? p.color : "var(--cream-faint)",
+                    }}
+                  >
+                    {p.cuts}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <p
+          className="mt-6 text-center text-xs leading-relaxed"
+          style={{ color: "var(--cream-faint)" }}
+        >
+          Aapka number delete ho gaya. Mic band hai.
+          <br />
+          Bade screen par dekhiye.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="panel p-4">
+      <p className="label-dim mb-1">{label}</p>
+      <p className="numerals text-2xl leading-none">{value}</p>
+    </div>
   );
 }
 

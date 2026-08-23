@@ -222,6 +222,7 @@ export function publicView(game: Game) {
     /** Who the host can hear right now. Drives the chyron and the 3D seats. */
     live: livePlayers(game).map((p) => p.id),
     hintsUsed: game.hintsUsed,
+    wrongAnswers: game.wrongAnswers.length,
     lifeline: {
       used: game.lifeline.used,
       activeFor: game.lifeline.activeFor,
