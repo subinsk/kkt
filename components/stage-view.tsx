@@ -34,12 +34,14 @@ const OUTCOME_AUDIO = {
 };
 
 export default function StageView({ code }: { code: string }) {
-  const { game, connected, onEvent } = useRoom(code);
+  const { game, connected, missing, onEvent } = useRoom(code);
   const [credentials, setCredentials] = useState<AgoraCredentials | null>(null);
   const [started, setStarted] = useState(false);
   const [starting, setStarting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
+  const [joinUrl, setJoinUrl] = useState<string | null>(null);
+  const [qrWarning, setQrWarning] = useState(false);
   const [minimal, setMinimal] = useState(false);
   const [caption, setCaption] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
@@ -62,17 +64,38 @@ export default function StageView({ code }: { code: string }) {
     setMinimal(params.get("minimal") === "1");
   }, []);
 
-  /** The QR judges scan. Points at the join page for this room. */
+  /**
+   * The QR contestants scan.
+   *
+   * The URL comes from the server, not from `window.location.origin`. The
+   * projector is usually open on localhost, and a QR encoding localhost resolves
+   * to the *phone* when scanned — so it silently fails for every contestant. The
+   * server knows whether a tunnel or a deployment URL is in front of it.
+   */
   useEffect(() => {
-    const url = `${window.location.origin}/join/${code}`;
-    QRCode.toDataURL(url, {
-      margin: 1,
-      width: 320,
-      color: { dark: "#f2ece2ff", light: "#00000000" },
-      errorCorrectionLevel: "M",
-    })
-      .then(setQr)
-      .catch(() => setQr(null));
+    let alive = true;
+    fetch(`/api/join-url?code=${encodeURIComponent(code)}`)
+      .then((r) => r.json())
+      .then((d: { joinUrl?: string; reachable?: boolean }) => {
+        if (!alive) return;
+        const url = d.joinUrl ?? `${window.location.origin}/join/${code}`;
+        setJoinUrl(url);
+        setQrWarning(d.reachable === false);
+        return QRCode.toDataURL(url, {
+          margin: 1,
+          width: 320,
+          color: { dark: "#f2ece2ff", light: "#00000000" },
+          errorCorrectionLevel: "M",
+        }).then((png) => {
+          if (alive) setQr(png);
+        });
+      })
+      .catch(() => {
+        if (alive) setQr(null);
+      });
+    return () => {
+      alive = false;
+    };
   }, [code]);
 
   /**
@@ -258,8 +281,22 @@ export default function StageView({ code }: { code: string }) {
 
   if (!game) {
     return (
-      <main className="grid min-h-dvh place-items-center">
-        <p className="label">Connecting to room {code}…</p>
+      <main className="grid min-h-dvh place-items-center px-6 text-center">
+        {missing ? (
+          <div>
+            <p className="display text-4xl uppercase" style={{ color: "var(--signal-red)" }}>
+              Room {code} nahi hai
+            </p>
+            <p className="mt-3 text-sm" style={{ color: "var(--cream-dim)" }}>
+              Ye code kisi room ka nahi hai. Host naya room khole.
+            </p>
+            <a href="/" className="btn btn-brass mt-6 inline-block px-6 py-3">
+              Main menu
+            </a>
+          </div>
+        ) : (
+          <p className="label">Connecting to room {code}…</p>
+        )}
       </main>
     );
   }
@@ -471,7 +508,26 @@ export default function StageView({ code }: { code: string }) {
               </div>
             )}
 
-            <p className="mt-5 text-lg" style={{ color: "var(--cream-dim)" }}>
+            {joinUrl && (
+              <p
+                className="mt-3 break-all font-mono text-[0.7rem]"
+                style={{ color: qrWarning ? "var(--signal-red)" : "var(--cream-faint)" }}
+              >
+                {joinUrl.replace(/^https?:\/\//, "")}
+              </p>
+            )}
+
+            {qrWarning && (
+              <p
+                className="mt-2 text-xs"
+                style={{ color: "var(--signal-red)" }}
+              >
+                Ye localhost hai — phone se nahi khulega. Tunnel chalao aur
+                PUBLIC_BASE_URL set karo.
+              </p>
+            )}
+
+            <p className="mt-4 text-lg" style={{ color: "var(--cream-dim)" }}>
               Phone se scan karein — ek se chaar log. Phir shuru.
             </p>
             <p className="mt-1 text-sm" style={{ color: "var(--cream-faint)" }}>

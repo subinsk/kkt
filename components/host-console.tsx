@@ -24,7 +24,7 @@ import { WIRE_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
  */
 
 export default function HostConsole({ code }: { code: string }) {
-  const { game, connected, events, onEvent, act } = useRoom(code);
+  const { game, connected, missing, events, onEvent, act } = useRoom(code);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<AgoraCredentials | null>(null);
@@ -101,8 +101,23 @@ export default function HostConsole({ code }: { code: string }) {
 
   if (!game) {
     return (
-      <main className="grid min-h-dvh place-items-center">
-        <p className="label">Connecting to room {code}…</p>
+      <main className="grid min-h-dvh place-items-center px-6 text-center">
+        {missing ? (
+          <div>
+            <p className="label" style={{ color: "var(--signal-red)" }}>
+              No room {code}
+            </p>
+            <p className="mt-2 text-sm" style={{ color: "var(--cream-dim)" }}>
+              Nothing is running under this code. Open a room first, then use the
+              Host panel link on the projector.
+            </p>
+            <a href="/" className="btn mt-5 inline-block px-5 py-2.5">
+              Main menu
+            </a>
+          </div>
+        ) : (
+          <p className="label">Connecting to room {code}…</p>
+        )}
       </main>
     );
   }

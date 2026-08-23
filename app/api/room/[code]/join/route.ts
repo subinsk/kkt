@@ -4,7 +4,6 @@ import { APP_CERTIFICATE, appId } from "@/lib/env";
 import {
   addPlayer,
   agentUidFor,
-  createGame,
   getGame,
   publicView,
 } from "@/lib/game/store";
@@ -33,15 +32,22 @@ export async function POST(
 ) {
   try {
     const { code } = await ctx.params;
-    /**
-     * Open the room if it does not exist yet.
+/**
+     * No auto-creation. Only the host opens a room.
      *
-     * A contestant reaches this by pointing a camera at a QR code. If the
-     * projector has been reloaded — or somebody scans before it is up — a 404
-     * here is a dead end they cannot do anything about, in front of an audience.
-     * Creating the room is harmless and always the more useful answer.
+     * Creating one here looked helpful and was not: a mistyped code would
+     * silently mint an empty room and the contestant would sit in a game nobody
+     * else was in, with everything apparently working. Room creation is an
+     * explicit act by the host — a wrong code should say so, loudly, and the
+     * screens offer a way out.
      */
-    const game = getGame(code) ?? createGame({ code });
+    const game = getGame(code);
+    if (!game) {
+      return NextResponse.json(
+        { error: `Room ${code.toUpperCase()} mila nahi. Code check karo.` },
+        { status: 404 },
+      );
+    }
 
     const body = (await request.json()) as {
       name?: string;

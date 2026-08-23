@@ -22,6 +22,14 @@ export type RoomEvent = GameEvent;
 export function useRoom(code: string) {
   const [game, setGame] = useState<PublicGame | null>(null);
   const [connected, setConnected] = useState(false);
+  /**
+   * Set when the server says this room does not exist.
+   *
+   * Distinct from "not loaded yet", which is what `game === null` means on the
+   * first render. Without the distinction every screen shows the same spinner
+   * forever and a mistyped code is indistinguishable from a slow network.
+   */
+  const [missing, setMissing] = useState(false);
   /** Most recent first. Bounded — this is for reacting, not for history. */
   const [events, setEvents] = useState<RoomEvent[]>([]);
 
@@ -108,7 +116,12 @@ export function useRoom(code: string) {
     const refresh = async () => {
       try {
         const res = await fetch(`/api/room/${encodeURIComponent(code)}`);
-        if (res.ok) setGame(await res.json());
+        if (res.ok) {
+          setMissing(false);
+          setGame(await res.json());
+        } else if (res.status === 404) {
+          setMissing(true);
+        }
       } catch {
         // The stream will correct us on its next snapshot.
       }
@@ -160,7 +173,7 @@ export function useRoom(code: string) {
     [code],
   );
 
-  return { game, connected, events, onEvent, act };
+  return { game, connected, missing, events, onEvent, act };
 }
 
 /**
