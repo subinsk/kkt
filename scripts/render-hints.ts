@@ -235,7 +235,11 @@ async function main() {
       "Vobiz SILENTLY skips audio it cannot fetch, so any missing hint is\n" +
         "forty-five seconds of dead air on a live call. Fix before rehearsing.\n",
     );
-    process.exit(1);
+    // Non-zero locally, so a pre-rehearsal check fails loudly. But never break
+    // a deploy over it: a game with no lifeline audio still plays, and a game
+    // that failed to build does not.
+    const onHost = process.env.CI || process.env.RENDER || process.env.VERCEL;
+    if (!onHost) process.exit(1);
   }
 }
 

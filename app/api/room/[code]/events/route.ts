@@ -11,6 +11,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
+ * 60s is the Vercel Hobby ceiling, and a round runs six minutes — so on Vercel
+ * this stream gets cut once a minute. `useRoom` reconnects with `?since=<seq>`
+ * and picks up where it left off, so it recovers, but it is a symptom of the
+ * deeper mismatch described in docs/DEPLOY.md. On any normal Node host (Render,
+ * Fly, local) the cap is simply never reached.
+ */
+export const maxDuration = 60;
+
+/**
  * GET /api/room/DEMO/events — the live feed every screen listens to.
  *
  * Server-sent events rather than a WebSocket, because Next.js route handlers
