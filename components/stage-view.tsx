@@ -18,9 +18,18 @@ import { WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
  * the room means no comb filtering and no phone-to-phone feedback.
  */
 
+/**
+ * The outcome stingers — real takes, not the host's synthesised voice.
+ *
+ * `render-hints.ts` can generate stand-ins for these, and said so itself: a
+ * placeholder in the host's own voice beats silence, but a recorded take beats
+ * the placeholder. These are the takes, so they are what plays. The generated
+ * `*_wah_kya_baat_hai.wav` / `*_aag_aag.wav` files are no longer read by
+ * anything.
+ */
 const OUTCOME_AUDIO = {
-  win: "/audio/outcome/win_wah_kya_baat_hai.wav",
-  lose: "/audio/outcome/lose_aag_aag.wav",
+  win: "/audio/outcome/win.mp3",
+  lose: "/audio/outcome/lose.mp3",
 };
 
 export default function StageView({ code }: { code: string }) {
@@ -174,7 +183,18 @@ export default function StageView({ code }: { code: string }) {
     const key = game.phase === "won" ? "win" : "lose";
     const audio = outcomeSfx.current[key];
 
+    /**
+     * Three separate things race to trigger this — the stinger ending, the
+     * stinger failing to start, and the fallback timeout — and exactly one of
+     * them should win. A rejected `play()` used to satisfy both the catch and
+     * the timeout, which had the host deliver his closing line twice over the
+     * top of himself, at the single most important beat in the show.
+     */
+    let spoken = false;
     const closingLine = async () => {
+      if (spoken) return;
+      spoken = true;
+
       const text =
         game.phase === "won"
           ? "Wah! Kya baat hai! Aap sabne kar dikhaya. Taaliyan!"
@@ -189,8 +209,10 @@ export default function StageView({ code }: { code: string }) {
     if (audio) {
       audio.addEventListener("ended", () => void closingLine(), { once: true });
       audio.play().catch(() => void closingLine());
-      // If the file is absent the stinger silently never plays, so make sure
-      // the closing line still lands.
+      // If the file is absent or blocked the stinger silently never plays, so
+      // make sure the closing line still lands. `paused` flips false the moment
+      // play() is called, so a clip that is merely still buffering does not trip
+      // this.
       setTimeout(() => {
         if (audio.paused && audio.currentTime === 0) void closingLine();
       }, 900);

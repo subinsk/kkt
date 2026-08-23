@@ -10,13 +10,29 @@
 export const WIRE_COLORS = ["red", "blue", "yellow", "green", "white"] as const;
 export type WireColor = (typeof WIRE_COLORS)[number];
 
-/** Hindi names, so the host can say them and so the phone UI can label pips. */
+/** Roman, for the phone UI and the projected chyron. Read, never spoken. */
 export const WIRE_LABELS_HI: Record<WireColor, string> = {
   red: "laal",
   blue: "neela",
   yellow: "peela",
   green: "hara",
   white: "safed",
+};
+
+/**
+ * Devanagari, for anything that goes to TTS.
+ *
+ * Sarvam Bulbul is a Hindi voice reading `target_language_code: hi-IN`. Handed
+ * Roman text it reads it as English — "laal taar" comes out as a tourist
+ * reading a phrasebook. So spoken strings and displayed strings are two
+ * different maps, and mixing them up is a bug you can only hear.
+ */
+export const WIRE_LABELS_DEV: Record<WireColor, string> = {
+  red: "लाल",
+  blue: "नीला",
+  yellow: "पीला",
+  green: "हरा",
+  white: "सफ़ेद",
 };
 
 export type WireStatus = "intact" | "cut" | "deferred";

@@ -14,4 +14,14 @@ _legacy/
 
 # Rendered audio — regenerate with `npm run render:audio` (needs SARVAM_API_KEY)
 public/audio/hints/
-public/audio/outcome/
+# A contents glob rather than the directory, because git cannot re-include a
+# file whose parent directory is excluded — and the two stingers below have to
+# be re-included.
+public/audio/outcome/*
+
+# The outcome stingers are recorded takes, not generated, so they cannot be
+# rebuilt on a deploy the way the hints can. Untracked they would simply be
+# absent on Vercel and Render, and a missing stinger is dead air rather than an
+# error — exactly the kind of silent failure that has to be committed away.
+!public/audio/outcome/win.mp3
+!public/audio/outcome/lose.mp3

@@ -101,8 +101,10 @@ export async function GET(request: NextRequest) {
 
   const outcomeAudio = await Promise.all(
     [
-      { name: "win", file: "win_wah_kya_baat_hai.wav" },
-      { name: "lose", file: "lose_aag_aag.wav" },
+      // The recorded takes the projector actually plays — not the synthesised
+      // stand-ins render-hints.ts can produce, which nothing reads any more.
+      { name: "win", file: "win.mp3" },
+      { name: "lose", file: "lose.mp3" },
     ].map(async (a) => ({
       ...a,
       present: await reachable(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 
@@ -31,6 +31,45 @@ export default function HomePage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Open a room the operator already has a code for.
+   *
+   * `POST /api/room` with a code is idempotent: it reuses the room if one
+   * exists and opens it if not. So this both rejoins a live room and resurrects
+   * one the server forgot on restart.
+   *
+   * Read from the ref rather than state — this field gets pasted into, and a
+   * paste does not always fire onChange.
+   */
+  async function openByCode(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = (codeRef.current?.value ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 8);
+
+    if (clean.length < 3) {
+      setError("Poora code daaliye.");
+      codeRef.current?.focus();
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      await fetch("/api/room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: clean }),
+      });
+      router.push(`/stage/${clean}`);
+    } catch {
+      // Navigate anyway — the stage and join routes both open a missing room.
+      router.push(`/stage/${clean}`);
+    }
+  }
 
   async function openRoom() {
     setBusy(true);
@@ -100,6 +139,38 @@ export default function HomePage() {
               {error}
             </p>
           )}
+
+          {/**
+           * Reopen a room by code.
+           *
+           * Rooms live in memory, so a server restart — or a projector reload
+           * after a crash — leaves three contestants holding phones that still
+           * show a code the server has forgotten. Typing it back in re-creates
+           * that exact room instead of minting a new code nobody has seen.
+           *
+           * `pointer-events-auto`, because the column above it deliberately lets
+           * clicks fall through to the canvas.
+           */}
+          <form onSubmit={openByCode} className="pointer-events-auto mt-6">
+            <label className="label-dim mb-2 block" htmlFor="code">
+              Ya purana code kholiye
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="code"
+                ref={codeRef}
+                maxLength={8}
+                autoCapitalize="characters"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="DEMO"
+                className="panel-sunken numerals w-full px-4 py-3 text-2xl uppercase tracking-[0.25em] outline-none focus:border-[var(--brass)]"
+              />
+              <button type="submit" className="btn shrink-0 px-5">
+                Kholo
+              </button>
+            </div>
+          </form>
 
           <p
             className="mt-5 text-sm leading-relaxed"

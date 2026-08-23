@@ -198,15 +198,38 @@ export function addPlayer(
   game: Game,
   input: { name: string; phoneE164?: string | null; consent?: boolean },
 ): Player {
-  const existing = game.players.find(
-    (p) => p.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
-  );
+  /**
+   * Is this somebody coming back, or somebody new?
+   *
+   * Matched on name OR phone number, because a reconnect has to be forgiving.
+   * A contestant whose phone locked, or who lost wifi for a moment, or who typed
+   * "subin" the second time instead of "Subin", must land back in their own seat
+   * — a new seat would orphan their wire credits and light up the wrong chair on
+   * the projector.
+   *
+   * The number is the stronger signal of the two, so it is checked first: names
+   * collide and get typo'd, numbers do not.
+   */
+  const name = input.name.trim();
+  const key = name.toLowerCase();
+
+  const existing =
+    (input.phoneE164
+      ? game.players.find((p) => p.phoneE164 === input.phoneE164)
+      : undefined) ??
+    game.players.find((p) => p.name.trim().toLowerCase() === key);
+
   if (existing) {
-    // Treat a repeat join under the same name as a reconnect, not a new seat.
     existing.connected = true;
+    // Let them correct a typo'd name on the way back in.
+    if (name) existing.name = name.slice(0, 24);
     if (input.phoneE164) existing.phoneE164 = input.phoneE164;
     if (input.consent !== undefined) existing.consent = input.consent;
-    emit(game, "player_rejoined", { playerId: existing.id, name: existing.name });
+    emit(game, "player_rejoined", {
+      playerId: existing.id,
+      name: existing.name,
+      seat: existing.seat,
+    });
     return existing;
   }
 
@@ -218,7 +241,7 @@ export function addPlayer(
   const player: Player = {
     id: `p${seat + 1}`,
     uid: uidFor(game.code, seat),
-    name: input.name.trim().slice(0, 24),
+    name: name.slice(0, 24),
     seat,
     // Only stored when consent was actually given — spec §9.6.
     phoneE164: input.consent && input.phoneE164 ? input.phoneE164 : null,
