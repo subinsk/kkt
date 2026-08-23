@@ -210,6 +210,16 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const panic = secondsLeft <= 60 && game?.phase === "running";
   const live = !peerMode && !lifelineActive && !roundOver;
 
+  /**
+   * A one-player room, where Peer Talk has nothing on the other end.
+   *
+   * `game` is null for the first render or two, and `?? 1` would call that
+   * solo — so default to *not* solo and let the first state push decide. A
+   * three-player room briefly mislabelled as solo would come on air without
+   * anyone asking, which is the one outcome to avoid.
+   */
+  const solo = game?.players.length === 1;
+
   /** Keep the server's view of who is live in step with the local toggle. */
   async function togglePeer() {
     const next = !peerMode;
@@ -228,6 +238,23 @@ function Console({ code, session }: { code: string; session: Joined }) {
       setPending(false);
     }
   }
+
+  /**
+   * Come on air automatically when playing alone.
+   *
+   * `startGame` does the same thing server-side, but the publish decision lives
+   * on the phone — the server flipping a flag does not put a track on the wire.
+   * So the handset mirrors it: once, on the first running state that shows a
+   * one-player room. Guarded by a ref rather than by `peerMode`, so a solo
+   * player who deliberately mutes themselves afterwards stays muted.
+   */
+  const cameOnAir = useRef(false);
+  useEffect(() => {
+    if (cameOnAir.current) return;
+    if (!solo || !peerMode || game?.phase !== "running") return;
+    cameOnAir.current = true;
+    void togglePeer();
+  });
 
   /**
    * Duck our own capture while the host is talking.
@@ -391,7 +418,9 @@ function Console({ code, session }: { code: string; session: Joined }) {
                       ? "Khatam"
                       : live
                         ? "On air"
-                        : "Peer talk"}
+                        : solo
+                          ? "Mic band"
+                          : "Peer talk"}
                 </span>
                 <span className="mt-1 block text-sm opacity-80">
                   {lifelineActive
@@ -400,7 +429,9 @@ function Console({ code, session }: { code: string; session: Joined }) {
                       ? "Round poora ho gaya"
                       : live
                         ? "Amitabh bhai sun rahe hain"
-                        : "Aap teeno baat kar sakte ho — host nahi sun raha"}
+                        : solo
+                          ? "Host nahi sun raha — tap karke baat karo"
+                          : "Aap sab baat kar sakte ho — host nahi sun raha"}
                 </span>
               </span>
               <span
@@ -418,12 +449,16 @@ function Console({ code, session }: { code: string; session: Joined }) {
             style={{ color: "var(--cream-faint)" }}
           >
             {lifelineActive
-              ? "Jo suna wo baad mein sabko batao"
+              ? solo
+                ? "Sun lo, phir jawab do"
+                : "Jo suna wo baad mein sabko batao"
               : roundOver
                 ? "Screen dekho"
                 : live
-                  ? "Tap karke wapas discussion mein jao"
-                  : "Jawab dene ke liye tap karo · discussion free hai"}
+                  ? solo
+                    ? "Tap karke mic band karo — sochne ka time free hai"
+                    : "Tap karke wapas discussion mein jao"
+                  : "Jawab dene ke liye tap karo · sochna free hai"}
           </p>
         </section>
 

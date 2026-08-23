@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit",
     "check:engine": "tsx scripts/engine-check.ts",
     "check": "tsc --noEmit && tsx scripts/engine-check.ts",
-    "render:hints": "tsx --env-file=.env.local scripts/render-hints.ts",
-    "render:audio": "tsx --env-file=.env.local scripts/render-hints.ts"
+    "render:hints": "tsx --env-file-if-exists=.env.local scripts/render-hints.ts",
+    "render:audio": "tsx --env-file-if-exists=.env.local scripts/render-hints.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",

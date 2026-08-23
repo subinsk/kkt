@@ -11,6 +11,7 @@ import { WirePanel, PANEL_POSITION } from "./wire-panel";
 import { Room, ROOM } from "./room";
 import { Table, DeskProps } from "./furniture";
 import { Confetti, Fire } from "./effects";
+import { SpeechBubble } from "./speech-bubble";
 
 /**
  * The set.
@@ -36,6 +37,7 @@ export function Scene({
   minimal,
   interactive = false,
   userDriving,
+  hostSaid = null,
 }: {
   game: PublicGame;
   agentLevelRef: React.RefObject<number>;
@@ -43,6 +45,8 @@ export function Scene({
   interactive?: boolean;
   /** Set true the moment the user grabs the camera. */
   userDriving?: React.RefObject<boolean>;
+  /** The host's most recent line, typed out above his head. */
+  hostSaid?: string | null;
 }) {
   return (
     <>
@@ -53,25 +57,29 @@ export function Scene({
        *
        * `makeDefault` matters: it registers these controls so anything else
        * asking three.js for "the" controls finds them. The polar clamp stops you
-       * dropping the camera through the carpet, and the distance clamp stops you
-       * ending up inside the host's head or out in the car park.
+       * dropping the camera through the carpet; `CameraBounds` below stops you
+       * ending up inside the host's head or outside the room looking at a wall.
        */}
       {interactive && (
-        <OrbitControls
-          makeDefault
-          target={LOOK_AT}
-          enablePan
-          enableZoom
-          enableRotate
-          enableDamping
-          dampingFactor={0.08}
-          minDistance={1.4}
-          maxDistance={11}
-          maxPolarAngle={Math.PI / 2.04}
-          onStart={() => {
-            if (userDriving) userDriving.current = true;
-          }}
-        />
+        <>
+          <OrbitControls
+            makeDefault
+            target={LOOK_AT}
+            enablePan
+            enableZoom
+            enableRotate
+            enableDamping
+            dampingFactor={0.08}
+            minDistance={MIN_ORBIT}
+            maxDistance={MAX_ORBIT}
+            minPolarAngle={0.3}
+            maxPolarAngle={Math.PI / 2.04}
+            onStart={() => {
+              if (userDriving) userDriving.current = true;
+            }}
+          />
+          <CameraBounds />
+        </>
       )}
       <Lighting game={game} />
 
@@ -82,6 +90,9 @@ export function Scene({
       <WirePanel game={game} minimal={minimal} />
       <Host game={game} levelRef={agentLevelRef} seatPositions={SEAT_POSITIONS} />
       <Contestants game={game} />
+
+      {/* Above and slightly in front of the host's head. */}
+      <SpeechBubble text={hostSaid} position={[0, 1.72, -1.42]} />
 
       {!minimal && (
         <>
@@ -161,6 +172,115 @@ function CameraRig({
         camera.fov = fov;
         camera.updateProjectionMatrix();
       }
+    }
+  });
+
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Camera bounds                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The camera may never leave the room.
+ *
+ * The set is a real box, not a backdrop: the back wall is sixteen solid boards
+ * and the window frame is solid boxes, so an orbit that swings outside the shell
+ * lands you looking at the *back* of the room — a slab of wood filling frame.
+ * Swing past a side wall instead and it disappears entirely (those are
+ * single-sided planes) leaving a hole into the void. Either way the view is
+ * gone, and on a projector mid-game that is unrecoverable.
+ *
+ * Rather than forbidding angles — which makes the drag feel broken, and is
+ * fragile because panning moves the target and invalidates any fixed clamp —
+ * the orbit *radius* is shortened to whatever keeps the camera this side of the
+ * nearest surface. You can still look from anywhere; rotating towards a wall
+ * simply draws you in rather than through.
+ */
+
+/** Outer cap, before the room is taken into account. */
+const MAX_ORBIT = 9;
+
+/** Room interior, held off the surfaces so the near plane never clips one. */
+const WALL_MARGIN = 0.34;
+const BOUND_MIN = new THREE.Vector3(
+  -ROOM.width / 2 + WALL_MARGIN,
+  0.4,
+  ROOM.backZ + WALL_MARGIN,
+);
+const BOUND_MAX = new THREE.Vector3(
+  ROOM.width / 2 - WALL_MARGIN,
+  ROOM.height - 0.24,
+  // No front wall — but the carpet and ceiling stop, so past this you would be
+  // looking at the room from off the end of the floor.
+  5.6,
+);
+
+/**
+ * Where a pan is allowed to put the point of interest. Tighter than the room:
+ * the target is what the camera orbits, so letting it reach a wall would leave
+ * no usable radius at all.
+ */
+const TARGET_MIN = new THREE.Vector3(-2.6, 0.6, ROOM.backZ + 0.8);
+const TARGET_MAX = new THREE.Vector3(2.6, 2.4, 3.0);
+
+/** Distance from `origin` along unit `dir` at which the interior box is left. */
+function distanceToWall(origin: THREE.Vector3, dir: THREE.Vector3) {
+  let t = Infinity;
+  for (const axis of ["x", "y", "z"] as const) {
+    const d = dir[axis];
+    if (Math.abs(d) < 1e-6) continue;
+    const bound = d > 0 ? BOUND_MAX[axis] : BOUND_MIN[axis];
+    t = Math.min(t, (bound - origin[axis]) / d);
+  }
+  // The target is clamped inside the box, so this is non-negative in practice.
+  return Math.max(0, t);
+}
+
+type Orbit = {
+  target: THREE.Vector3;
+  minDistance: number;
+  maxDistance: number;
+};
+
+/** Resting close limit — far enough back to not be inside the host's head. */
+const MIN_ORBIT = 1.4;
+
+function CameraBounds() {
+  const controls = useThree((state) => state.controls) as Orbit | null;
+  const camera = useThree((state) => state.camera);
+  const offset = useRef(new THREE.Vector3());
+
+  useFrame(() => {
+    // `makeDefault` registers the controls a frame or two after mount.
+    if (!controls?.target) return;
+
+    controls.target.clamp(TARGET_MIN, TARGET_MAX);
+
+    const dir = offset.current.copy(camera.position).sub(controls.target);
+    const distance = dir.length();
+    if (distance < 1e-4) return;
+    dir.divideScalar(distance);
+
+    const limit = THREE.MathUtils.clamp(
+      distanceToWall(controls.target, dir),
+      0.4,
+      MAX_ORBIT,
+    );
+
+    // Both ends, because a wall closer than the resting minimum has to win —
+    // being inside the panelling is worse than being close to the host — and
+    // OrbitControls resolves a crossed pair in favour of the minimum, which
+    // would fight the correction below every frame.
+    controls.minDistance = Math.min(MIN_ORBIT, limit);
+    // Set for the next update: OrbitControls runs at priority -1, so its own
+    // clamp has already happened by the time we get here...
+    controls.maxDistance = limit;
+    // ...which is why the current frame is corrected by hand. Without this the
+    // wall would flash into frame for one frame on a fast drag.
+    if (distance > limit) {
+      camera.position.copy(controls.target).addScaledVector(dir, limit);
     }
   });
 

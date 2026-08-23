@@ -33,6 +33,7 @@ export default function StageView({ code }: { code: string }) {
   const [minimal, setMinimal] = useState(false);
   const [caption, setCaption] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
+  const [hostSaid, setHostSaid] = useState<string | null>(null);
 
   const agora = useAgora({
     role: "stage",
@@ -134,6 +135,10 @@ export default function StageView({ code }: { code: string }) {
   useEffect(
     () =>
       onEvent((event) => {
+        // Everything the host says, straight from the LLM proxy before TTS.
+        if (event.type === "host_said" || event.type === "agent_spoke") {
+          setHostSaid(String(event.payload.text ?? ""));
+        }
         if (event.type === "wire_selected") {
           setCaption(String(event.payload.screen ?? ""));
         }
@@ -214,6 +219,7 @@ export default function StageView({ code }: { code: string }) {
         minimal={minimal}
         interactive
         resetToken={resetToken}
+        hostSaid={hostSaid}
         className="absolute inset-0"
       />
 
@@ -403,7 +409,12 @@ export default function StageView({ code }: { code: string }) {
             )}
 
             <p className="mt-5 text-lg" style={{ color: "var(--cream-dim)" }}>
-              Teen log phone se scan karein. Phir shuru.
+              Phone se scan karein — ek se chaar log. Phir shuru.
+            </p>
+            <p className="mt-1 text-sm" style={{ color: "var(--cream-faint)" }}>
+              {game.players.length === 1
+                ? "Akele bhi chalega — aap seedha on air honge."
+                : "Jitne aaye hain, utne se shuru ho jaayega."}
             </p>
 
             <div className="mt-4 flex items-center justify-center gap-2">

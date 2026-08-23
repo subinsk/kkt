@@ -24,12 +24,13 @@ import { WIRE_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
  */
 
 export default function HostConsole({ code }: { code: string }) {
-  const { game, connected, events, act } = useRoom(code);
+  const { game, connected, events, onEvent, act } = useRoom(code);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<AgoraCredentials | null>(null);
   const [minimal, setMinimal] = useState(false);
   const [resetToken, setResetToken] = useState(0);
+  const [hostSaid, setHostSaid] = useState<string | null>(null);
 
   /**
    * Join the channel as a monitor: subscribed, publishing nothing, playing
@@ -55,6 +56,17 @@ export default function HostConsole({ code }: { code: string }) {
       alive = false;
     };
   }, [code]);
+
+  /** Mirror the host's speech into the preview bubble. */
+  useEffect(
+    () =>
+      onEvent((event) => {
+        if (event.type === "host_said" || event.type === "agent_spoke") {
+          setHostSaid(String(event.payload.text ?? ""));
+        }
+      }),
+    [onEvent],
+  );
 
   async function run(label: string, payload: Record<string, unknown>) {
     setBusy(label);
@@ -192,6 +204,7 @@ export default function HostConsole({ code }: { code: string }) {
               minimal={minimal}
               interactive
               resetToken={resetToken}
+              hostSaid={hostSaid}
               className="absolute inset-0"
             />
 

@@ -24,6 +24,7 @@ export function StageCanvas({
   interactive = false,
   /** Bump this to hand control back to the automatic camera. */
   resetToken = 0,
+  hostSaid = null,
   className,
 }: {
   game: PublicGame;
@@ -31,6 +32,8 @@ export function StageCanvas({
   minimal?: boolean;
   interactive?: boolean;
   resetToken?: number;
+  /** The host's latest line, for the speech bubble. */
+  hostSaid?: string | null;
   className?: string;
 }) {
   /**
@@ -66,6 +69,7 @@ export function StageCanvas({
         minimal={minimal}
         interactive={interactive}
         userDriving={userDriving}
+        hostSaid={hostSaid}
       />
     </Canvas>
   );

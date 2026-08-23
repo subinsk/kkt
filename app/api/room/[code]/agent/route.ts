@@ -7,7 +7,7 @@ import {
   interruptAgent,
   speak,
 } from "@/lib/agora-rest";
-import { AGENT_NAME, GREETING, SYSTEM_PROMPT } from "@/lib/agent-config";
+import { AGENT_NAME, SYSTEM_PROMPT, greetingFor } from "@/lib/agent-config";
 import { agentUidFor, emit, getGame } from "@/lib/game/store";
 
 export const runtime = "nodejs";
@@ -89,7 +89,7 @@ export async function POST(
               token: agentToken,
               agentUid: String(agentUid),
               systemPrompt: SYSTEM_PROMPT,
-              greeting: GREETING,
+              greeting: greetingFor(game.players.map((p) => p.name)),
             }),
           },
         },

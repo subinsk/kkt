@@ -35,6 +35,7 @@ import {
   publicView,
 } from "../lib/game/state";
 import { riddleForWire } from "../lib/game/riddles";
+import { GREETING, greetingFor } from "../lib/agent-config";
 
 let passed = 0;
 let failed = 0;
@@ -109,6 +110,49 @@ setPeerMode(game, priya.id, true);
 setPeerMode(game, rahul.id, true);
 check("back to all-discussing", livePlayers(game).length === 0);
 check("nobody attributed when silent", game.lastSpeaker === null);
+
+/* -- solo round ----------------------------------------------------------- */
+/**
+ * One contestant, playing alone.
+ *
+ * This is here because the failure mode is silent in the worst way: the round
+ * starts, the host asks a question, and the only person in the room is still in
+ * Peer Talk — so nothing they say ever reaches the agent, and it looks like a
+ * broken mic rather than a rule.
+ */
+console.log("\nsolo round");
+const soloGame = createGame({ code: "SOLO" });
+const alone = addPlayer(soloGame, { name: "Nikhil" });
+throws("an empty room still cannot start", () =>
+  startGame(createGame({ code: "EMPTY" })),
+);
+startGame(soloGame);
+check("one contestant is enough to start", soloGame.phase === "running");
+check(
+  "the solo contestant is on air, not in peer talk",
+  livePlayers(soloGame).length === 1,
+  `live: ${livePlayers(soloGame).length}`,
+);
+check(
+  "solo speech is attributed without guessing",
+  soloGame.lastSpeaker === alone.id,
+  `got ${soloGame.lastSpeaker}`,
+);
+check("public view agrees they are live", publicView(soloGame).live.length === 1);
+setPeerMode(soloGame, alone.id, true);
+check(
+  "a solo contestant can still mute themselves",
+  livePlayers(soloGame).length === 0,
+);
+check(
+  "the greeting names a lone contestant",
+  greetingFor(["Nikhil"]).includes("Nikhil"),
+);
+check(
+  "a group still gets the group greeting",
+  greetingFor(["Nikhil", "Priya"]) === GREETING,
+);
+
 
 /* -- clock ---------------------------------------------------------------- */
 console.log("\nclock");

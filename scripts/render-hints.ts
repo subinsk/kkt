@@ -49,26 +49,37 @@ async function toDevanagari(lines: string[]): Promise<string[]> {
     return lines;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1200,
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Transliterate Roman-script Hindi into Devanagari. Keep the meaning and word order identical. Keep English loanwords that Hindi speakers use as English words (fruit, birthday) in Devanagari phonetics. Return ONLY a JSON array of strings, same length and order as the input. No prose, no code fences.",
-        },
-        { role: "user", content: JSON.stringify(lines) },
-      ],
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1200,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Transliterate Roman-script Hindi into Devanagari. Keep the meaning and word order identical. Keep English loanwords that Hindi speakers use as English words (fruit, birthday) in Devanagari phonetics. Return ONLY a JSON array of strings, same length and order as the input. No prose, no code fences.",
+          },
+          { role: "user", content: JSON.stringify(lines) },
+        ],
+      }),
+    });
+  } catch (err) {
+    // A build host with no egress to Groq must not take the deploy down.
+    console.warn(
+      `  ! transliteration unreachable (${
+        err instanceof Error ? err.message : err
+      }) — using Roman.`,
+    );
+    return lines;
+  }
 
   if (!res.ok) {
     console.warn(`  ! transliteration failed (${res.status}) — using Roman.`);
@@ -238,9 +249,24 @@ async function main() {
     // Non-zero locally, so a pre-rehearsal check fails loudly. But never break
     // a deploy over it: a game with no lifeline audio still plays, and a game
     // that failed to build does not.
-    const onHost = process.env.CI || process.env.RENDER || process.env.VERCEL;
-    if (!onHost) process.exit(1);
+    if (!ON_HOST) process.exit(1);
   }
 }
 
-void main();
+/**
+ * On a build host, nothing this script can hit — a missing key, a dead network,
+ * a Sarvam outage — is worth failing a deploy over: the game plays without the
+ * lifeline audio, and it does not play at all if the build never shipped.
+ * Locally the same failure is loud, because that is a rehearsal blocker.
+ */
+const ON_HOST = Boolean(
+  process.env.CI || process.env.RENDER || process.env.VERCEL,
+);
+
+main().catch((err) => {
+  console.log(
+    `\nrender-hints failed — ${err instanceof Error ? err.message : err}\n`,
+  );
+  if (!ON_HOST) process.exit(1);
+  console.log("Continuing the build anyway; audio will be missing at runtime.\n");
+});

@@ -307,6 +307,19 @@ export function startGame(game: Game): Game {
   if (game.phase !== "lobby") return game;
   if (game.players.length === 0) throw new Error("No contestants have joined.");
 
+  /**
+   * A solo round starts on air.
+   *
+   * Peer Talk is a private channel between contestants, so with one contestant
+   * it has nothing on the other end — leaving them in it means the host asks a
+   * question and cannot hear the only person in the room. There is no way for
+   * that to be what anybody wanted, so the server decides it rather than
+   * hoping the player finds the button. The phone mirrors this on its side.
+   */
+  if (game.players.length === 1 && game.players[0].peerMode) {
+    setPeerMode(game, game.players[0].id, false);
+  }
+
   game.phase = "running";
   game.startedAt = Date.now();
   emit(game, "game_started", {

@@ -9,7 +9,7 @@ import {
   wiresBy,
   type Game,
 } from "@/lib/game/state";
-import { getGame } from "@/lib/game/store";
+import { emit, getGame } from "@/lib/game/store";
 import { isSelfEcho, rememberAgentUtterance } from "@/lib/game/attribution";
 
 export const runtime = "nodejs";
@@ -113,14 +113,19 @@ function buildLiveState(game: Game): string {
    * a room that has deliberately muted itself and then wonders why nobody
    * answered.
    */
+  const solo = game.players.length === 1;
   const peerLine =
     live.length === 0
-      ? "PEER TALK: every contestant is discussing among themselves right now — you cannot hear any of them. Wait for someone to come back to you. Do not repeat the question more than once."
-      : `LIVE TO YOU: ${live.map((p) => p.name).join(", ")}. Everyone else is in Peer Talk and cannot be heard.${
-          live.length === 1
-            ? ` Only ${live[0].name} is audible, so anything you hear is them — use their name with confidence.`
-            : ""
-        }`;
+      ? solo
+        ? `MIC OFF: ${game.players[0]?.name ?? "the contestant"} has muted their microphone and there is nobody else in the room, so you cannot hear anything at all. Wait. Do not ask them to discuss with anyone — there is nobody to discuss with. One short reassuring line at most.`
+        : "PEER TALK: every contestant is discussing among themselves right now — you cannot hear any of them. Wait for someone to come back to you. Do not repeat the question more than once."
+      : solo
+        ? `LIVE TO YOU: ${live[0].name}, playing alone. Every word you hear is theirs — no arbitration, no asking who spoke.`
+        : `LIVE TO YOU: ${live.map((p) => p.name).join(", ")}. Everyone else is in Peer Talk and cannot be heard.${
+            live.length === 1
+              ? ` Only ${live[0].name} is audible, so anything you hear is them — use their name with confidence.`
+              : ""
+          }`;
 
   return `${state}\n${peerLine}`;
 }
@@ -226,6 +231,15 @@ export async function POST(request: Request) {
           // Remember what we are about to say, so we can recognise it if it
           // comes back through a phone mic.
           rememberAgentUtterance(room, text);
+          /**
+           * Publish it to the screens.
+           *
+           * This is the only place the host's words exist as text before TTS
+           * swallows them, so it is the only place the speech bubble and the
+           * chyron can be fed from. Fired before the SSE chunk goes out, so the
+           * bubble starts typing as he starts speaking rather than after.
+           */
+          if (text.trim()) emit(game, "host_said", { text: text.trim() });
           controller.enqueue(
             sse(chunk(id, model, { role: "assistant", content: text })),
           );
