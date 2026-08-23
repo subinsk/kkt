@@ -5,6 +5,7 @@ import {
   publicView,
   secondsLeft,
   subscribe,
+  sweepLifeline,
 } from "@/lib/game/store";
 
 export const runtime = "nodejs";
@@ -88,6 +89,8 @@ export async function GET(
        */
       const ticker = setInterval(() => {
         if (!open) return;
+        // Release a call that no webhook ever closed, before anything else.
+        sweepLifeline(game);
         const ended = checkTimeout(game);
         send("tick", {
           secondsLeft: secondsLeft(game),

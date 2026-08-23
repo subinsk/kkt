@@ -431,6 +431,35 @@ export default function StageView({ code }: { code: string }) {
         </div>
       </div>
 
+      {/**
+       * Lifeline status, with its deadline.
+       *
+       * A phone ringing in the room is the beat people remember, so the screen
+       * has to say it is happening. The countdown matters as much: a ring
+       * indicator with no end looks identical to a hang, and this one is telling
+       * the room the system will give up on its own if nobody picks up.
+       */}
+      {game.lifeline.limit > 0 && (
+        <div className="pointer-events-none absolute right-8 top-32 text-right">
+          <div
+            className="panel px-4 py-2.5"
+            style={{ borderColor: "var(--signal-amber)" }}
+          >
+            <p className="label" style={{ color: "var(--signal-amber)" }}>
+              {game.lifeline.status === "connected"
+                ? "Friend on the line"
+                : "Phone a friend · ringing"}
+            </p>
+            <p
+              className="numerals text-3xl leading-none"
+              style={{ color: "var(--signal-amber)" }}
+            >
+              {Math.max(0, game.lifeline.limit - game.lifeline.waiting)}s
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------------------------- contestants --- */}
       <div className="pointer-events-none absolute bottom-32 left-8 space-y-2">
         <p className="label">Contestants</p>

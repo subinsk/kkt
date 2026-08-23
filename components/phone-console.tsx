@@ -287,6 +287,52 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const roundOver = game?.phase === "won" || game?.phase === "lost";
 
   /**
+   * The outcome stinger, on the handset too.
+   *
+   * The original reasoning was that three phones firing the same file a few
+   * hundred milliseconds apart sounds terrible — and it does, in one room. But a
+   * phone that goes silent at the payoff is worse: a contestant holding it hears
+   * nothing at the moment the game is won. So it plays here as well, quietly,
+   * and the projector remains the loud one.
+   *
+   * Unlocked on the Peer Talk toggle rather than on a dedicated gesture, because
+   * that is a button every contestant presses early and browsers only arm audio
+   * on a real interaction.
+   */
+  const stingers = useRef<Record<string, HTMLAudioElement>>({});
+  const stingerPlayed = useRef(false);
+
+  const unlockStingers = () => {
+    if (Object.keys(stingers.current).length) return;
+    for (const [key, src] of Object.entries({
+      won: "/audio/outcome/win_wah_kya_baat_hai.wav",
+      lost: "/audio/outcome/lose_aag_aag.wav",
+    })) {
+      const audio = new Audio(src);
+      audio.preload = "auto";
+      // Quieter than the room speaker — this is a companion, not the source.
+      audio.volume = 0;
+      audio
+        .play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = 0.55;
+        })
+        .catch(() => {
+          // A missing file is reported by /api/health, not shouted about here.
+        });
+      stingers.current[key] = audio;
+    }
+  };
+
+  useEffect(() => {
+    if (!roundOver || stingerPlayed.current || !game) return;
+    stingerPlayed.current = true;
+    stingers.current[game.phase]?.play().catch(() => {});
+  }, [roundOver, game]);
+
+  /**
    * How long the outcome beat holds before the scoreboard appears.
    *
    * Matched to the stinger plus the tail of the confetti and fire on the
@@ -334,6 +380,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
 
   /** Keep the server's view of who is live in step with the local toggle. */
   async function togglePeer() {
+    // Spend the gesture on arming the outcome audio while we have one.
+    unlockStingers();
     const next = !peerMode;
     setPeerMode(next);
     setPending(true);
@@ -769,6 +817,30 @@ function Console({ code, session }: { code: string; session: Joined }) {
             </span>
           </button>
         </section>
+
+        {/**
+         * The wait, with a visible deadline.
+         *
+         * A ring indicator with no end is indistinguishable from a hang. Showing
+         * the ceiling means a contestant knows the system has not forgotten
+         * them, and that it will give up on its own.
+         */}
+        {game && game.lifeline.limit > 0 && (
+          <div
+            className="panel mt-3 flex items-center justify-between gap-3 p-3"
+            style={{ borderColor: "var(--signal-amber)" }}
+          >
+            <span className="flex items-center gap-2 text-sm">
+              <PhoneCall size={15} className="animate-pulse" style={{ color: "var(--signal-amber)" }} />
+              {game.lifeline.status === "connected"
+                ? "Call chal rahi hai — suno"
+                : "Ring ho raha hai…"}
+            </span>
+            <span className="numerals text-lg" style={{ color: "var(--signal-amber)" }}>
+              {Math.max(0, game.lifeline.limit - game.lifeline.waiting)}s
+            </span>
+          </div>
+        )}
 
         {lifelineNote && (
           <p

@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { checkTimeout, getGame, publicView } from "@/lib/game/store";
+import {
+  checkTimeout,
+  getGame,
+  publicView,
+  sweepLifeline,
+} from "@/lib/game/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +19,9 @@ export async function GET(
   if (!game) {
     return NextResponse.json({ error: `No room ${code}` }, { status: 404 });
   }
-  // Reading is a fine moment to notice the clock ran out.
+  // Reading is a fine moment to notice the clock ran out, or that a call was
+  // never closed by a webhook.
+  sweepLifeline(game);
   checkTimeout(game);
   return NextResponse.json(publicView(game));
 }

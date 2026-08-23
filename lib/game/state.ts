@@ -104,6 +104,17 @@ export type LifelineState = {
    */
   granted: boolean;
   /**
+   * When the status last changed.
+   *
+   * Exists so nothing can wait forever. Vobiz webhooks are the only thing that
+   * moves a call from dialing to connected to done, and a webhook that never
+   * arrives — a lost request, a stale tunnel, a carrier that simply goes quiet —
+   * would otherwise leave the call pinned open. Since the host is muted for the
+   * duration of a call, that is not a stuck ring indicator: it is a host who
+   * never speaks again.
+   */
+  since: number;
+  /**
    * A contestant has tapped the button but the call has NOT been placed.
    *
    * The tap is a request, not a trigger. It goes into LIVE STATE, the host asks
@@ -151,6 +162,21 @@ export type Game = {
   events: GameEvent[];
   seq: number;
 };
+
+/**
+ * How long each lifeline state may last before the watchdog intervenes.
+ *
+ * Thirty seconds to answer: an Indian mobile rings for three to eight, so thirty
+ * is generous and still short enough that a dead call does not eat an eighth of
+ * the round. Ninety on a live call, comfortably past the forty-five second
+ * window plus the sign-off, so the watchdog only ever fires when a hangup
+ * webhook was genuinely lost.
+ */
+export function lifelineLimit(status: LifelineState["status"]): number {
+  if (status === "dialing" || status === "ringing") return 30;
+  if (status === "connected") return 90;
+  return 0;
+}
 
 export const DEFAULT_DURATION_SECONDS = 360; // 6:00, spec §5
 export const PENALTY_WRONG = 20;
@@ -255,6 +281,10 @@ export function publicView(game: Game) {
       status: game.lifeline.status,
       requestedBy: game.lifeline.requestedBy,
       granted: game.lifeline.granted,
+      /** Seconds spent in the current state, for the on-screen countdown. */
+      waiting: Math.max(0, Math.round((Date.now() - game.lifeline.since) / 1000)),
+      /** How long this state is allowed to last before the watchdog acts. */
+      limit: lifelineLimit(game.lifeline.status),
     },
     lastSpeaker: game.lastSpeaker,
     contested: game.contested,

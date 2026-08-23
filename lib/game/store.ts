@@ -20,6 +20,7 @@ import {
   allWiresCut,
   findPlayer,
   findWire,
+  lifelineLimit,
   livePlayers,
   publicView,
   secondsLeft,
@@ -146,6 +147,7 @@ export function createGame(opts?: {
       penaltyApplied: false,
       granted: false,
       requestedBy: null,
+      since: Date.now(),
     },
     wrongAnswers: [],
 
@@ -436,6 +438,39 @@ export function resumeClock(game: Game) {
 }
 
 /**
+ * Nothing waits forever.
+ *
+ * Vobiz webhooks are the only thing that advances a call from dialing to
+ * connected to done, and one that never arrives — a lost request, a stale
+ * tunnel, a carrier going quiet — would pin the call open. That is not a stuck
+ * indicator: the host is muted for the duration of a call, so a call that never
+ * ends is a host who never speaks again, for the rest of the round.
+ *
+ * So every state has a deadline and this sweeps it. Runs on the SSE tick, which
+ * means once a second while anything is watching.
+ */
+export function sweepLifeline(game: Game) {
+  const { status, since } = game.lifeline;
+  const limit = lifelineLimit(status);
+  if (limit === 0) return;
+
+  const waited = (Date.now() - since) / 1000;
+  if (waited < limit) return;
+
+  if (status === "dialing" || status === "ringing") {
+    // Never answered. Refund in full and hand the lifeline back — the team is
+    // not paying for a call that did not happen.
+    lifelineFailed(game, `no answer within ${limit}s`);
+    return;
+  }
+
+  // Answered, but no hangup ever arrived. The 45s window is long past; close it
+  // so the host is released.
+  emit(game, "lifeline_timeout", { waited: Math.round(waited) });
+  lifelineEnded(game);
+}
+
+/**
  * Called from every mutation rather than from a timer, plus a slow poll in the
  * SSE route. There is no authoritative tick — see the note on `secondsLeft`.
  */
@@ -623,6 +658,7 @@ export function beginLifeline(game: Game, playerId: string, callId: string) {
     granted: true,
     // The request has been acted on.
     requestedBy: null,
+    since: Date.now(),
   };
   emit(game, "lifeline_dialing", { playerId, playerName: player.name, callId });
   return game.lifeline;
@@ -633,6 +669,7 @@ export function lifelineAnswered(game: Game) {
   if (game.lifeline.penaltyApplied) return;
   game.lifeline.status = "connected";
   game.lifeline.penaltyApplied = true;
+  game.lifeline.since = Date.now();
   adjustClock(game, PENALTY_LIFELINE, "phone a friend connected");
   // Acknowledge it out loud, then say nothing until the call ends — the proxy
   // enforces the silence.
@@ -647,6 +684,7 @@ export function lifelineEnded(game: Game) {
   const playerId = game.lifeline.activeFor;
   game.lifeline.status = "done";
   game.lifeline.activeFor = null;
+  game.lifeline.since = Date.now();
   // Hand the floor back and ask what they got — the whole point of the lifeline
   // is that they relay it to the room.
   hostSay(game.code, LIFELINE_LINES.ended);
@@ -674,6 +712,7 @@ export function lifelineFailed(game: Game, reason: string) {
     // not a reason to make them ask again.
     granted: true,
     requestedBy: null,
+    since: Date.now(),
   };
 
   // Requirement #9 out loud: the failure is stated, not hidden.

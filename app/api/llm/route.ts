@@ -195,8 +195,15 @@ export async function POST(request: Request) {
          *
          * Returning empty rather than refusing keeps Agora happy — it gets a
          * well-formed completion with nothing in it, and says nothing.
+         *
+         * The age check is a second lock on the same door. `sweepLifeline`
+         * should always have closed a stale call by now, but if it somehow has
+         * not, a mute that outlives its window would silence the host for the
+         * rest of the round. Two independent guards, because the failure is
+         * total and silent.
          */
-        if (game.lifeline.status === "connected") {
+        const callAge = (Date.now() - game.lifeline.since) / 1000;
+        if (game.lifeline.status === "connected" && callAge < 95) {
           controller.enqueue(
             sse(chunk(id, model, { role: "assistant", content: "" })),
           );
