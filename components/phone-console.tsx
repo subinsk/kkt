@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
 import { SEAT_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
+import { StageCanvas } from "@/components/stage/stage-canvas";
 
 /**
  * The contestant's handset — spec §4, plus Peer Talk.
@@ -12,9 +13,14 @@ import { SEAT_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
  * this is a control surface they operate by feel while looking somewhere else.
  * So: few controls, all large, and the one that matters is unmissable.
  *
- * No WebGL here. Three phones running WebRTC with open mics is already the
- * fragile part of the system, and a spinning canvas on each of them buys nothing
- * — the 3D lives on the projector, which is what the room is actually watching.
+ * The set renders here too, at the top of the screen. A contestant should be
+ * able to watch their own wire get cut without looking up, and the phone is
+ * where their eyes already are when they are answering.
+ *
+ * It runs in `minimal` mode: no shadows, no antialiasing, no particles. Three
+ * phones already carrying WebRTC with open mics is the fragile part of this
+ * system, and the difference between a shadowed render and an unshadowed one is
+ * not worth a dropped frame in the middle of an answer.
  */
 
 type Joined = {
@@ -233,9 +239,21 @@ function JoinForm({
 /* -------------------------------------------------------------------------- */
 
 function Console({ code, session }: { code: string; session: Joined }) {
-  const { game, connected, act } = useRoom(code);
+  const { game, connected, onEvent, act } = useRoom(code);
   const [peerMode, setPeerMode] = useState(true);
   const [pending, setPending] = useState(false);
+  const [hostSaid, setHostSaid] = useState<string | null>(null);
+
+  /** Feed the speech bubble in the handset's own view of the set. */
+  useEffect(
+    () =>
+      onEvent((event) => {
+        if (event.type === "host_said" || event.type === "agent_spoke") {
+          setHostSaid(String(event.payload.text ?? ""));
+        }
+      }),
+    [onEvent],
+  );
 
   const lifelineSpent = game?.lifeline.used ?? false;
   const lifelineActive = game?.lifeline.activeFor === session.player.id;
@@ -393,7 +411,39 @@ function Console({ code, session }: { code: string; session: Joined }) {
         }}
       />
 
-      <div className="mx-auto max-w-md px-5 pb-8 pt-6">
+      {/**
+       * The set, on the handset.
+       *
+       * Same scene component as the projector, so a contestant watches their own
+       * wire get cut without looking up — and the phone is where their eyes
+       * already are while they are answering.
+       *
+       * `minimal` and a low DPR ceiling: no shadows, no antialiasing, no
+       * particles. Three phones already carrying WebRTC with open mics is the
+       * fragile part of this system, and a shadowed render is not worth a dropped
+       * frame mid-answer. Draggable, so they can look around between questions.
+       */}
+      {game && (
+        <div className="relative h-[36vh] w-full">
+          <StageCanvas
+            game={game}
+            agentLevelRef={agora.agentLevelRef}
+            minimal
+            interactive
+            hostSaid={hostSaid}
+            className="absolute inset-0"
+          />
+          {/* Fade the bottom edge into the panel below it. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
+            style={{
+              background: "linear-gradient(180deg, transparent, var(--ink))",
+            }}
+          />
+        </div>
+      )}
+
+      <div className="mx-auto max-w-md px-5 pb-8 pt-3">
         {/* -- header ------------------------------------------------------ */}
         <div className="flex items-start justify-between">
           <div>

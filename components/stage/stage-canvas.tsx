@@ -57,7 +57,10 @@ export function StageCanvas({
       // Capped at 2. WebGL plus WebRTC plus screen-share on an unfamiliar
       // laptop is a real framerate risk, and a 3x retina buffer buys nothing
       // on a projector.
-      dpr={[1, 2]}
+      // 1.5 in minimal mode: that flag exists for phones and for laptops
+      // struggling to carry WebGL alongside WebRTC, and pixel count is the
+      // cheapest thing to give up.
+      dpr={minimal ? [1, 1.5] : [1, 2]}
       shadows={!minimal}
       gl={{ antialias: !minimal, powerPreference: "high-performance" }}
       camera={{ position: CAMERA_HOME, fov: 40 }}

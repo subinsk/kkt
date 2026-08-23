@@ -197,7 +197,10 @@ export function buildAgentProperties(opts: {
       trigger: { mode: "fixed_time", config: { response_wait_ms: 1200 } },
       content: {
         mode: "static",
-        config: {
+        // `static_config`, not `config`. Agora rejects the latter with a 400
+        // naming this exact path — the nested key differs from the one used by
+        // `trigger`, which really does take `config`.
+        static_config: {
           phrases: [
             "Ek minute...",
             "Main taar trace kar raha hoon...",
