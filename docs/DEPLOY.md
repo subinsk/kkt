@@ -134,8 +134,13 @@ the clip count in `/api/health`. Check it after every deploy.
 One wrinkle worth knowing: on Vercel `public/` is served by the CDN and is *not*
 on the function's filesystem, so an `existsSync` check reports every clip as
 missing even when they are served fine. `/api/health` therefore falls back to an
-HTTP `HEAD` when the disk says no, which is the question that actually matters —
-Vobiz fetches these over HTTP too.
+HTTP `HEAD` when the disk says no.
+
+That probe deliberately asks the host that served the request, **not**
+`PUBLIC_BASE_URL`. The two can be different origins, and probing
+`PUBLIC_BASE_URL` would report some other process's files as proof that this
+build shipped them — which is precisely what happened on the first attempt at
+this check.
 
 ---
 
