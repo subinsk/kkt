@@ -32,11 +32,13 @@ import {
   PENALTY_HINT,
   PENALTY_LIFELINE,
   PENALTY_WRONG,
+  WIRE_COLORS,
   livePlayers,
   secondsLeft,
   publicView,
 } from "../lib/game/state";
-import { RIDDLES, riddleForWire } from "../lib/game/riddles";
+import { RIDDLES, answerKey, riddleForWire } from "../lib/game/riddles";
+import { sanitizeSpoken } from "../lib/llm";
 import {
   FILLER_PHRASES,
   FILLER_PHRASE_MAX_CHARS,
@@ -374,6 +376,107 @@ check(
 
 const view = publicView(game);
 check("public view exposes seat colours", view.players.every((p) => p.color));
+
+/* -- judging ------------------------------------------------------------- */
+/**
+ * Two ways a wire gets cut when it should not have been, both of which look
+ * like a working game right up until a judge answers "anda" and wins a wire.
+ *
+ *   1. The model judged an answer it was never given the answer to. `accept`
+ *      sat unused in the riddle bank for weeks; `answerKey` is what puts it in
+ *      front of the judge every turn.
+ *   2. The model cut a colour that was merely mentioned rather than the one in
+ *      play. The server cannot judge meaning, but it can insist the wire being
+ *      cut is the wire whose riddle was actually asked.
+ */
+console.log("\njudging");
+for (const wire of WIRE_COLORS) {
+  const key = answerKey(wire);
+  check(
+    `${wire.padEnd(6)} has an answer for the judge`,
+    key.answer.length > 0 && key.accept.length > 0,
+  );
+  check(
+    `${wire.padEnd(6)} answer is Devanagari, as the host would say it`,
+    !/[A-Za-z]/.test(key.answer),
+    key.answer,
+  );
+  check(
+    `${wire.padEnd(6)} names the wrong answers that sound right`,
+    key.reject.length > 0,
+  );
+  check(
+    `${wire.padEnd(6)} answer is not also on the reject list`,
+    !key.reject.some((r) => r.toLowerCase() === key.answer.toLowerCase()),
+  );
+}
+
+const judgeGame = createGame({ code: "JUDGE" });
+addPlayer(judgeGame, { name: "Asha" });
+startGame(judgeGame);
+selectWire(judgeGame, "red");
+throws("the host cannot cut a wire that is not in play", () =>
+  cutWire(judgeGame, "green", null, { requireActive: true }),
+);
+check(
+  "and the wire it tried to cut is untouched",
+  judgeGame.wires.find((w) => w.color === "green")!.status === "intact",
+);
+cutWire(judgeGame, "red", null, { requireActive: true });
+check(
+  "the active wire still cuts normally",
+  judgeGame.wires.find((w) => w.color === "red")!.status === "cut",
+);
+throws("and nothing can be cut with no wire in play", () =>
+  cutWire(judgeGame, "blue", null, { requireActive: true }),
+);
+// The host console's force-cut is a human overriding on purpose, so it is the
+// one path that skips the guard.
+cutWire(judgeGame, "blue", null);
+check(
+  "host console force-cut still overrides",
+  judgeGame.wires.find((w) => w.color === "blue")!.status === "cut",
+);
+
+/* -- what reaches the microphone ------------------------------------------ */
+/**
+ * Everything in `content` goes two places: the TTS voice and the on-screen
+ * transcript. A model that writes its tool call as prose instead of emitting it
+ * on the tool channel therefore gets read aloud to the room — and the open
+ * models on Groq do this whenever a turn mixes speech with an action.
+ */
+console.log("\nspoken output");
+check(
+  "leaked tool arguments never reach the microphone",
+  sanitizeSpoken('बिलकुल सही! cut_wire {"color": "red", "answered_by": "p1"}') ===
+    "बिलकुल सही!",
+  JSON.stringify(sanitizeSpoken('बिलकुल सही! cut_wire {"color": "red", "answered_by": "p1"}')),
+);
+check(
+  "a trailing playerid is stripped",
+  sanitizeSpoken("लाल तार कट गया। playerid: 1") === "लाल तार कट गया।",
+  JSON.stringify(sanitizeSpoken("लाल तार कट गया। playerid: 1")),
+);
+check(
+  "channel markers and tool_call tags are stripped",
+  sanitizeSpoken("<|channel|>commentary<|message|><tool_call>get_state</tool_call> ठीक है।") ===
+    "ठीक है।",
+  JSON.stringify(sanitizeSpoken("<|channel|>commentary<|message|><tool_call>get_state</tool_call> ठीक है।")),
+);
+check(
+  "a turn that was nothing but machinery becomes silence",
+  sanitizeSpoken('{"color": "red"}') === "",
+  JSON.stringify(sanitizeSpoken('{"color": "red"}')),
+);
+check(
+  "reasoning still never reaches the microphone",
+  sanitizeSpoken("<think>she said coconut</think>बिलकुल सही!") === "बिलकुल सही!",
+);
+check(
+  "ordinary Hindi is left completely alone",
+  sanitizeSpoken("नारियल? बिलकुल सही! लाल तार कट गया। अब कौन सा तार?") ===
+    "नारियल? बिलकुल सही! लाल तार कट गया। अब कौन सा तार?",
+);
 
 /* -- loss path ------------------------------------------------------------ */
 const lossGame = createGame({ code: "LOSS", durationSeconds: 60 });

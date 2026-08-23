@@ -39,7 +39,7 @@ import {
   requireGame,
   selectWire,
 } from "./game/store";
-import { getRiddle, riddleForWire } from "./game/riddles";
+import { answerKey, getRiddle, riddleForWire } from "./game/riddles";
 import { startLifeline } from "./game/lifeline";
 
 /* -------------------------------------------------------------------------- */
@@ -81,7 +81,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: "cut_wire",
       description:
-        "Cut a wire. Call this ONLY after you have judged an answer semantically correct. The server validates and fires the on-screen animation.",
+        "Cut a wire. Call this ONLY after a contestant has said something that MEANS the ANSWER KEY shown for the active wire in LIVE STATE. Not for a good guess, not for a clever answer that fits the riddle, not for a question or a wire colour — only for the answer. The server refuses any wire that is not the active one, and a refused cut costs you a turn on air, so check before you call.",
       parameters: {
         type: "object",
         properties: {
@@ -269,12 +269,20 @@ export async function executeTool(
     case "select_wire": {
       const color = asWireColor(args.color);
       const { wire, riddle } = selectWire(game, color);
+      const key = answerKey(color);
       return {
         ok: true,
         color,
         // The Devanagari form, because this is what goes to TTS.
         riddle: riddle?.speak ?? "",
         riddle_roman: riddle?.screen ?? "",
+        // The key travels with the riddle, so the judge never has to hold an
+        // answer in its head across turns — LIVE STATE repeats it anyway.
+        answer: key.answer,
+        also_accept: key.accept,
+        known_wrong: key.reject,
+        instruction:
+          "Ask the riddle. Judge every answer against `answer` — generous about wording, strict about meaning. Never say `answer` out loud, and never cut for anything in `known_wrong`.",
         hints_already_given: wire.hintsGiven,
         hints_remaining: Math.max(
           0,
@@ -291,7 +299,13 @@ export async function executeTool(
       // A player id the model invented would silently mis-credit the cut, and
       // the scoreboard is per-contestant.
       const player = answeredBy ? findPlayer(game, answeredBy) : undefined;
-      const result = cutWire(game, color, player?.id ?? null);
+      // `requireActive`: the server cannot judge the answer, but it can insist
+      // the wire being cut is the wire whose riddle was actually asked. A model
+      // that drifts onto a colour somebody merely mentioned would otherwise cut
+      // a wire nobody had been asked about.
+      const result = cutWire(game, color, player?.id ?? null, {
+        requireActive: true,
+      });
 
       return {
         ok: true,

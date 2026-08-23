@@ -473,17 +473,34 @@ export function selectWire(game: Game, color: WireColor) {
  * Cut a wire. Only ever called after a *semantically* correct answer — the
  * judging happens in the LLM layer, deliberately, because "wo brown wala fruit"
  * has to pass and no matcher written here would let it.
+ *
+ * `requireActive` is the one thing the server can check about a cut without
+ * doing the judging itself: that the wire being cut is the wire that was
+ * actually on the table. The model reaches this through `cut_wire` with the
+ * guard ON, because a colour it drifted onto — the one it just asked about, the
+ * one somebody named while thinking aloud — would otherwise cut a wire whose
+ * riddle was never even asked. The host console's force-cut passes it OFF: that
+ * is a human deliberately overriding, which is the whole point of the button.
  */
 export function cutWire(
   game: Game,
   color: WireColor,
   answeredBy: string | null,
+  opts: { requireActive?: boolean } = {},
 ) {
   if (game.phase !== "running") throw new Error("The round is not running.");
 
   const wire = findWire(game, color);
   if (!wire) throw new Error(`No such wire: ${color}`);
   if (wire.status === "cut") throw new Error(`The ${color} wire is already cut.`);
+
+  if (opts.requireActive && game.activeWire !== color) {
+    throw new Error(
+      game.activeWire
+        ? `The ${color} wire is not in play — ${game.activeWire} is. Nothing was cut. If they answered the ${color} riddle, call select_wire first.`
+        : `No wire is in play, so there was no question to answer. Nothing was cut. Ask which wire they want and call select_wire.`,
+    );
+  }
 
   wire.status = "cut";
   wire.cutBy = answeredBy;

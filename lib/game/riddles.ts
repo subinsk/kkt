@@ -28,8 +28,12 @@
  *   Roman-only key list would quietly stop matching and every hint would fall
  *   back to generic.
  *
- * `accept` is a *hint to the judge*, not a matcher. Answer checking is semantic
- * and runs through the LLM — spec §6. A regex here would embarrass us live.
+ * `accept` is the **answer key**, and it is handed to the judge every turn —
+ * see `answerKey` at the foot of this file. It is still not a matcher: checking
+ * stays semantic and runs through the LLM (spec §6), because "wo brown wala
+ * fruit" has to pass and no regex here would let it. What the key changes is the
+ * other direction — the model now knows what it is judging *towards*, so a
+ * confident wrong answer stops reading as a correct one.
  *
  * `nearMiss` is what makes hints feel intelligent rather than canned: the host
  * answers the specific wrong thing that was actually said.
@@ -202,4 +206,36 @@ export function riddleForWire(wire: WireColor): Riddle {
  */
 export function hintAudioPath(wire: WireColor): string {
   return `/audio/hints/${RIDDLE_BY_WIRE[wire].id}_h1.wav`;
+}
+
+/**
+ * The answer key, in the shape the judge actually needs.
+ *
+ * This exists because of a bug that only shows up on stage: the model was asked
+ * to judge answers semantically while being told the riddle and *nothing else*.
+ * "बाहर से सख़्त, अंदर से पानी" describes a coconut — but it also describes an
+ * egg, and a watermelon, and a water bottle, all of which are sitting in
+ * `nearMiss` precisely because they are wrong. With no key to check against, a
+ * plausible-sounding guess reads as correct and the wire gets cut for it.
+ *
+ * `accept` was already here and was never wired to anything. This is what wires
+ * it in — the judge gets the answer, the model still never says it.
+ *
+ * `reject` is the near-miss keys: the guesses we already know are wrong *and*
+ * sound right, which are exactly the ones a semantic judge waves through.
+ */
+export function answerKey(wire: WireColor): {
+  answer: string;
+  accept: string[];
+  reject: string[];
+} {
+  const riddle = RIDDLE_BY_WIRE[wire];
+  const devanagari = riddle.accept.find((a) => /[ऀ-ॿ]/.test(a));
+  return {
+    // The Devanagari form is the canonical one, because it is the form the host
+    // would have to speak — and the one it is under orders never to speak.
+    answer: devanagari ?? riddle.accept[0],
+    accept: riddle.accept,
+    reject: Object.keys(riddle.nearMiss),
+  };
 }

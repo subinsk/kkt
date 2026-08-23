@@ -139,7 +139,7 @@ async function callOpenAI(
   const reply = json.choices[0]?.message;
 
   return {
-    content: stripReasoning(reply?.content ?? ""),
+    content: sanitizeSpoken(reply?.content ?? ""),
     toolCalls: reply?.tool_calls ?? [],
   };
 }
@@ -162,6 +162,80 @@ export function stripReasoning(text: string): string {
     .replace(/<think>[\s\S]*$/i, "")
     .replace(/<\/?(?:thinking|reasoning|analysis)>/gi, "")
     .trim();
+}
+
+/** Every tool name the host can call — the vocabulary of a leak. */
+const TOOL_NAME =
+  /\b(?:get_state|select_wire|cut_wire|wrong_answer|get_hint|defer_wire|grant_lifeline|phone_a_friend)\b/gi;
+
+/** The same names with an argument blob hanging off them, written as prose. */
+const TOOL_CALL_AS_PROSE =
+  /\b(?:get_state|select_wire|cut_wire|wrong_answer|get_hint|defer_wire|grant_lifeline|phone_a_friend)\b\s*[({][^)}]*[)}]?/gi;
+
+/**
+ * Argument keys, in every spelling a model mangles them into, paired with
+ * whatever value follows. `playerid: 1` and `"answered_by": "p2"` both match.
+ */
+const ARG_PAIR =
+  /["'`]?\b(?:player_?id|answered_?by|answer_?text|tool_?calls?|function|arguments|parameters|recipient|channel|colou?r|wire)\b["'`]?\s*[:=]\s*["'`]?[\w-]*["'`]?,?/gi;
+
+/**
+ * Strip machinery that leaked into the spoken turn.
+ *
+ * Every character of `content` goes two places: the TTS voice, and the
+ * transcript on the projector and the host console. So when a model writes its
+ * tool call as prose instead of emitting it on the tool channel — `cut_wire
+ * {"color": "red"}`, or a bare `playerid: 1` trailing the sentence — it is not
+ * a cosmetic glitch. The host reads JSON aloud to the room and the caption shows
+ * it to the audience.
+ *
+ * This happens often enough to design against rather than hope away: the
+ * open-weight models on Groq drop into text-mode tool calls whenever a turn
+ * mixes speech with an action, which is most turns in this game.
+ *
+ * Safe to be aggressive, for one reason specific to this host: it speaks
+ * Devanagari and nothing else, by standing order. Anything here that matches
+ * Latin identifiers and JSON is machinery by definition — there is no line of
+ * real dialogue it could be eating.
+ */
+export function sanitizeSpoken(text: string): string {
+  const out = stripReasoning(text)
+    // Harmony framing: <|start|>assistant<|channel|>commentary<|message|>…
+    // A bare Latin word sandwiched between two markers is a channel name, not
+    // speech, so it goes with the markers rather than being left behind.
+    .replace(/<\|[^|>]*\|>[ \t]*[A-Za-z_]*[ \t]*(?=<\|)/g, " ")
+    // Whatever markers remain.
+    .replace(/<\|[^|>]*\|>/g, " ")
+    // <tool_call>…</tool_call>, <function=cut_wire>…</function>, and the
+    // half-closed variants a truncated turn leaves behind.
+    .replace(/<\/?(?:tool_call|tool_response|function|invoke)[^>]*>/gi, " ")
+    // Fenced blocks — a model asked for JSON often reaches for markdown.
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/```[\s\S]*$/g, " ")
+    // `cut_wire({...})` or `cut_wire {"color": "red"}` written out as prose.
+    .replace(TOOL_CALL_AS_PROSE, " ")
+    // A bare JSON object. One level deep and non-greedy, which is the shape a
+    // leaked tool argument actually takes.
+    .replace(/\{[^{}]*[:=][^{}]*\}/g, " ")
+    // The residue once the braces are gone: `player_id: p1`, `playerid = 1`,
+    // `"answered_by": "p2"`, with or without the trailing comma.
+    .replace(ARG_PAIR, " ")
+    // A tool name left standing on its own after its arguments were removed.
+    .replace(TOOL_NAME, " ")
+    // Punctuation orphaned by the removals, then whitespace.
+    .replace(/[ \t]*[{}[\]"'`]+[ \t]*/g, " ")
+    .replace(/\s*,\s*(?=[।?!,]|$)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  /**
+   * If nothing with a letter in it survived, the whole turn was machinery.
+   *
+   * Returning "" rather than the leftovers is the right answer: an empty turn
+   * is silence, and silence beats the host reading ": 1" to the room.
+   */
+  return /\p{L}/u.test(out) ? out : "";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -295,5 +369,5 @@ async function callAnthropic(
       },
     }));
 
-  return { content: text, toolCalls };
+  return { content: sanitizeSpoken(text), toolCalls };
 }

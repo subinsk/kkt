@@ -1,7 +1,7 @@
 import { TOOL_DEFINITIONS, executeTool } from "@/lib/tools";
 import { callUpstream, type Message } from "@/lib/llm";
 import { liveStateBlock } from "@/lib/agent-config";
-import { getRiddle, riddleForWire } from "@/lib/game/riddles";
+import { answerKey, getRiddle, riddleForWire } from "@/lib/game/riddles";
 import {
   findWire,
   livePlayers,
@@ -80,6 +80,9 @@ function buildLiveState(game: Game): string {
   }
 
   const live = livePlayers(game);
+  // The answer key only exists while a wire is in play — with no active wire
+  // there is nothing to judge, and the block says so rather than going quiet.
+  const key = activeWire ? answerKey(activeWire) : null;
   const state = liveStateBlock({
     secondsLeft: secondsLeft(game),
     intact: wiresBy(game, "intact"),
@@ -89,6 +92,9 @@ function buildLiveState(game: Game): string {
     activeRiddle: riddle?.speak ?? null,
     activeRiddleHints: riddle?.hints ?? [],
     hintsGivenOnActive: wire?.hintsGiven ?? 0,
+    activeAnswer: key?.answer ?? null,
+    activeAccept: key?.accept ?? [],
+    activeReject: key?.reject ?? [],
     nearMissNotes,
     hintsUsed: game.hintsUsed,
     lifelineUsed: game.lifeline.used,
