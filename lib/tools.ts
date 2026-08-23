@@ -33,6 +33,7 @@ import {
 import {
   cutWire,
   deferWire,
+  grantLifeline,
   giveHint,
   recordWrongAnswer,
   requireGame,
@@ -146,6 +147,24 @@ export const TOOL_DEFINITIONS = [
         type: "object",
         properties: { color: { type: "string", enum: [...WIRE_COLORS] } },
         required: ["color"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "grant_lifeline",
+      description:
+        "Approve Phone a Friend for a contestant. Call this the moment they ask for it and you have told them the cost — it unlocks the button on their phone, it does NOT place the call and costs nothing. They then press it themselves, or you can call phone_a_friend for them if they ask you to dial.",
+      parameters: {
+        type: "object",
+        properties: {
+          player_id: {
+            type: "string",
+            description: "Who asked (p1, p2, p3). Omit if unclear.",
+          },
+        },
+        required: [],
       },
     },
   },
@@ -342,6 +361,18 @@ export async function executeTool(
         cost_seconds: 0,
         instruction:
           "This wire is parked, at no cost. Remember to offer it again later — coming back to it unprompted is worth more than a right answer.",
+        ...stateFor(game),
+      };
+    }
+
+    case "grant_lifeline": {
+      const playerId = args.player_id ? String(args.player_id) : null;
+      grantLifeline(game, playerId);
+      return {
+        ok: true,
+        instruction:
+          "Approved. The button on their phone is now live — tell them to press it when ready. Do NOT call phone_a_friend unless they ask you to dial for them. Nothing has been charged yet.",
+        cost_seconds: 0,
         ...stateFor(game),
       };
     }

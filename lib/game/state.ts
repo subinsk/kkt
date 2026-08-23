@@ -94,6 +94,16 @@ export type LifelineState = {
   /** Charged on `answered`, refunded on failure — spec §9.4. */
   penaltyApplied: boolean;
   /**
+   * The host has said yes. The button unlocks; the call is still not placed.
+   *
+   * Three states, not two, because the interesting one is the middle: asked but
+   * not yet allowed. A button that dials on first press would let one careless
+   * thumb spend forty-five seconds of a six-minute round, and a button that is
+   * simply always live makes the host's permission decorative. So: locked →
+   * granted by the host → the contestant presses it themselves.
+   */
+  granted: boolean;
+  /**
    * A contestant has tapped the button but the call has NOT been placed.
    *
    * The tap is a request, not a trigger. It goes into LIVE STATE, the host asks
@@ -244,6 +254,7 @@ export function publicView(game: Game) {
       activeFor: game.lifeline.activeFor,
       status: game.lifeline.status,
       requestedBy: game.lifeline.requestedBy,
+      granted: game.lifeline.granted,
     },
     lastSpeaker: game.lastSpeaker,
     contested: game.contested,

@@ -590,12 +590,13 @@ export default function HostConsole({ code }: { code: string }) {
                       className="btn btn-brass px-2 py-1 text-[0.7rem]"
                       disabled={busy !== null}
                       onClick={() =>
-                        agent("speak", {
-                          text: "Lifeline use kar rahe hain? Chalis-paanch second lagenge. Pakka?",
+                        run("grant lifeline", {
+                          type: "grant_lifeline",
+                          playerId: game.lifeline.requestedBy ?? undefined,
                         })
                       }
                     >
-                      Offer it
+                      Unlock it
                     </button>
                     <button
                       className="btn px-2 py-1 text-[0.7rem]"

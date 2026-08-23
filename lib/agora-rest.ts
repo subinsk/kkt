@@ -1,4 +1,5 @@
 import { appId as agoraAppId, optional, publicBaseUrl, required } from "./env";
+import { FILLER_PHRASES } from "./agent-config";
 
 /**
  * Thin wrapper over the Conversational AI Engine REST API.
@@ -14,6 +15,34 @@ function authHeader(): string {
   const id = required("AGORA_CUSTOMER_ID");
   const secret = required("AGORA_CUSTOMER_SECRET");
   return `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
+}
+
+/**
+ * A failed Agora call, with the status and reason kept as fields.
+ *
+ * The message alone was not enough: callers need to tell "this agent is gone"
+ * (404 / TaskNotFound, which is a normal thing to discover) apart from "Agora
+ * is unhappy" (anything else, which must not be treated as gone — assuming a
+ * live agent is dead is how you end up with two hosts talking over each other).
+ */
+export class AgoraError extends Error {
+  readonly status: number;
+  readonly reason: string | null;
+
+  constructor(path: string, status: number, body: string, reason: string | null) {
+    super(`Agora ${path} failed (${status}): ${body}`);
+    this.name = "AgoraError";
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+/** True when Agora is telling us this agent no longer exists. */
+export function agentIsGone(error: unknown): boolean {
+  return (
+    error instanceof AgoraError &&
+    (error.status === 404 || error.reason === "TaskNotFound")
+  );
 }
 
 export async function agoraFetch<T>(
@@ -33,7 +62,13 @@ export async function agoraFetch<T>(
   const text = await res.text();
   if (!res.ok) {
     // Non-200 responses are { detail, reason } — surface both, they are useful.
-    throw new Error(`Agora ${path} failed (${res.status}): ${text}`);
+    let reason: string | null = null;
+    try {
+      reason = (JSON.parse(text) as { reason?: string }).reason ?? null;
+    } catch {
+      // Not JSON. The status still tells us what we need.
+    }
+    throw new AgoraError(path, res.status, text, reason);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -202,13 +237,8 @@ export function buildAgentProperties(opts: {
         // `trigger`, which really does take `config`.
         static_config: {
           // Devanagari, for the same reason as everything else spoken: Bulbul
-          // reads Roman script as English.
-          phrases: [
-            "एक मिनट...",
-            "मैं तार ट्रेस कर रहा हूँ...",
-            "देखते हैं...",
-            "कंप्यूटर जी, जवाब दिखाइए...",
-          ],
+          // reads Roman script as English. Length-capped — see FILLER_PHRASES.
+          phrases: FILLER_PHRASES,
           selection_rule: "shuffle",
         },
       },

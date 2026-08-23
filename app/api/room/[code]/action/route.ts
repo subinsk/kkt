@@ -3,6 +3,7 @@ import {
   allPeerMode,
   cancelLifelineRequest,
   cutWire,
+  grantLifeline,
   deferWire,
   emit,
   endGame,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/game/store";
 import { WIRE_COLORS, type WireColor } from "@/lib/game/state";
 import { setHolding } from "@/lib/game/attribution";
+import { startLifeline } from "@/lib/game/lifeline";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +116,23 @@ export async function POST(
 
       case "cancel_lifeline":
         cancelLifelineRequest(game);
+        break;
+
+      /**
+       * The contestant presses the unlocked button and the call goes out.
+       *
+       * `startLifeline` refuses unless the host has granted permission, so this
+       * cannot be used to skip the asking.
+       */
+      case "use_lifeline": {
+        if (!body.playerId) throw new Error("playerId required");
+        const result = await startLifeline(game, body.playerId);
+        return NextResponse.json({ ...publicView(game), lifeline: result });
+      }
+
+      /** Host console override, for when he cannot hear the room. */
+      case "grant_lifeline":
+        grantLifeline(game, body.playerId ?? null);
         break;
 
       /* -- round flow --------------------------------------------------- */

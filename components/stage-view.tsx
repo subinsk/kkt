@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { StageCanvas } from "./stage/stage-canvas";
 import { useRoom, formatClock } from "@/lib/use-room";
@@ -43,6 +44,8 @@ export default function StageView({ code }: { code: string }) {
   const [caption, setCaption] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
   const [hostSaid, setHostSaid] = useState<string | null>(null);
+  const [menuIn, setMenuIn] = useState<number | null>(null);
+  const router = useRouter();
 
   const agora = useAgora({
     role: "stage",
@@ -221,6 +224,35 @@ export default function StageView({ code }: { code: string }) {
     }
   }, [game, code]);
 
+  /**
+   * After the outcome, offer the way out — do not just take it.
+   *
+   * A projector that navigates itself away mid-applause is worse than one that
+   * waits: the scoreboard is the thing people photograph. So it counts down
+   * visibly and can be cancelled, and the countdown is generous enough to read
+   * the numbers and take a picture.
+   */
+  useEffect(() => {
+    if (!game) return;
+    const over = game.phase === "won" || game.phase === "lost";
+    if (!over) {
+      setMenuIn(null);
+      return;
+    }
+    if (menuIn !== null) return;
+    setMenuIn(30);
+  }, [game, menuIn]);
+
+  useEffect(() => {
+    if (menuIn === null) return;
+    if (menuIn <= 0) {
+      router.push("/");
+      return;
+    }
+    const t = setTimeout(() => setMenuIn((n) => (n === null ? null : n - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [menuIn, router]);
+
   const secondsLeft = game?.secondsLeft ?? 360;
   const panic = secondsLeft <= 60 && game?.phase === "running";
 
@@ -365,6 +397,21 @@ export default function StageView({ code }: { code: string }) {
                   } · lifeline ${game.lifeline.used ? "use hui" : "bachi"}`
                 : `${game.wires.filter((w) => w.status !== "cut").length} taar bache the`}
             </p>
+
+            {/* The exit, offered rather than taken. */}
+            {menuIn !== null && (
+              <div className="pointer-events-auto mt-8 flex items-center justify-center gap-3">
+                <button
+                  onClick={() => router.push("/")}
+                  className="btn btn-brass px-6 py-3"
+                >
+                  Main menu ({menuIn})
+                </button>
+                <button onClick={() => setMenuIn(null)} className="btn px-6 py-3">
+                  Yahin ruko
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -36,8 +36,12 @@ import {
   secondsLeft,
   publicView,
 } from "../lib/game/state";
-import { riddleForWire } from "../lib/game/riddles";
-import { openingLine } from "../lib/agent-config";
+import { RIDDLES, riddleForWire } from "../lib/game/riddles";
+import {
+  FILLER_PHRASES,
+  FILLER_PHRASE_MAX_CHARS,
+  openingLine,
+} from "../lib/agent-config";
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +116,70 @@ setPeerMode(game, priya.id, true);
 setPeerMode(game, rahul.id, true);
 check("back to all-discussing", livePlayers(game).length === 0);
 check("nobody attributed when silent", game.lastSpeaker === null);
+
+/* -- spoken script ------------------------------------------------------- */
+/**
+ * Every string that reaches TTS must be Devanagari.
+ *
+ * Sarvam Bulbul reads `target_language_code: hi-IN`, so a Roman line is not a
+ * style slip — it is read as English, in an English accent, and you only find
+ * out by listening. `hints[0]` is the worst case: it is pre-rendered straight to
+ * WAV for the Phone a Friend call, with no model in the loop to rescue it.
+ *
+ * `screen` and the `nearMiss` keys are exempt on purpose — one is only ever read
+ * with eyes, the other is matched against what a contestant said.
+ */
+console.log("\nspoken script");
+const HAS_ROMAN = /[A-Za-z]/;
+for (const riddle of RIDDLES) {
+  check(
+    `${riddle.wire.padEnd(6)} riddle is Devanagari`,
+    !HAS_ROMAN.test(riddle.speak),
+    riddle.speak,
+  );
+  const romanHints = riddle.hints.filter((h) => HAS_ROMAN.test(h));
+  check(
+    `${riddle.wire.padEnd(6)} hints are Devanagari`,
+    romanHints.length === 0,
+    romanHints.join(" | "),
+  );
+  const romanLines = Object.values(riddle.nearMiss).filter((v) =>
+    HAS_ROMAN.test(v),
+  );
+  check(
+    `${riddle.wire.padEnd(6)} near-miss lines are Devanagari`,
+    romanLines.length === 0,
+    romanLines.join(" | "),
+  );
+  // A Devanagari key matters as much as a Devanagari line: the host writes its
+  // wrong_answer argument in Devanagari, so a Roman-only key list would match
+  // nothing and every diagnostic hint would silently fall back to generic.
+  check(
+    `${riddle.wire.padEnd(6)} near-miss can match a Hindi guess`,
+    Object.keys(riddle.nearMiss).some((k) => !HAS_ROMAN.test(k)),
+  );
+}
+
+/**
+ * Filler phrases, measured.
+ *
+ * Agora caps a filler phrase containing non-Latin characters at 20 characters
+ * and rejects the whole `/join` if one is over — so this is not a nicety, it is
+ * the difference between a host in the room and a red 400 on the projector
+ * thirty seconds before a demo. Devanagari spends characters fast; a phrase that
+ * reads short can easily be 27.
+ */
+for (const phrase of FILLER_PHRASES) {
+  check(
+    `filler "${phrase}" fits Agora's ${FILLER_PHRASE_MAX_CHARS}-char cap`,
+    phrase.length <= FILLER_PHRASE_MAX_CHARS,
+    `${phrase.length} characters`,
+  );
+}
+check(
+  "filler phrases are Devanagari",
+  !FILLER_PHRASES.some((f) => HAS_ROMAN.test(f)),
+);
 
 /* -- solo round ----------------------------------------------------------- */
 /**

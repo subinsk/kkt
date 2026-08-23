@@ -26,15 +26,27 @@ import { RIDDLES } from "../lib/game/riddles";
 const OUT_DIR = join(process.cwd(), "public", "audio", "hints");
 const SARVAM_TTS = "https://api.sarvam.ai/text-to-speech";
 
+/** Any Latin letter at all — the tell that a line is not ready for an Indic voice. */
+const HAS_ROMAN = /[A-Za-z]/;
+
 /**
- * Devanagari for the phone line too.
+ * A safety net, not a step.
  *
- * The `hints` arrays are Roman, because they are also read aloud by the host via
- * the LLM and shown on screen. Bulbul is an Indic voice and mispronounces Roman
- * Hindi, so anything going to TTS directly gets transliterated first — by the
- * same model that runs the game, since it already speaks both.
+ * The riddle bank is authored in Devanagari now, so the normal render makes no
+ * model call at all and this returns its input untouched. It stays because the
+ * failure it guards against is inaudible until it is on a phone line: one Roman
+ * hint slipped into the bank and Bulbul reads the whole clip as English. If that
+ * ever happens, the same model that runs the game fixes the script here rather
+ * than shipping a mispronounced WAV.
  */
 async function toDevanagari(lines: string[]): Promise<string[]> {
+  if (!lines.some((line) => HAS_ROMAN.test(line))) return lines;
+
+  console.warn(
+    "  ! some hints are still Roman — transliterating before synthesis." +
+      " Authoring them in Devanagari in lib/game/riddles.ts is the real fix.",
+  );
+
   const key = process.env.LLM_API_KEY;
   const url =
     process.env.LLM_UPSTREAM_URL ??
@@ -200,9 +212,7 @@ async function main() {
 
   console.log("\nRendering Phone a Friend hints with Sarvam Bulbul\n");
 
-  const romanHints = RIDDLES.map((r) => r.hints[0]);
-  console.log("  transliterating to Devanagari…");
-  const devanagari = await toDevanagari(romanHints);
+  const devanagari = await toDevanagari(RIDDLES.map((r) => r.hints[0]));
 
   let ok = 0;
   for (let i = 0; i < RIDDLES.length; i++) {

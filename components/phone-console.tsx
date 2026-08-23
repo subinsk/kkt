@@ -5,6 +5,23 @@ import { useRoom, formatClock } from "@/lib/use-room";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
 import { SEAT_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
 import { StageCanvas } from "@/components/stage/stage-canvas";
+import {
+  Mic,
+  MicOff,
+  PhoneCall,
+  Lock,
+  Hand,
+  Users,
+  Clock,
+  Scissors,
+  Lightbulb,
+  XCircle,
+  Trophy,
+  Flame,
+  Home,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 
 /**
  * The contestant's handset — spec §4, plus Peer Talk.
@@ -258,6 +275,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const lifelineSpent = game?.lifeline.used ?? false;
   const lifelineActive = game?.lifeline.activeFor === session.player.id;
   const requestedByMe = game?.lifeline.requestedBy === session.player.id;
+  const lifelineGranted = game?.lifeline.granted ?? false;
   const requestedBySomeone = Boolean(game?.lifeline.requestedBy);
   const roundOver = game?.phase === "won" || game?.phase === "lost";
 
@@ -358,18 +376,28 @@ function Console({ code, session }: { code: string; session: Joined }) {
    * for a spoken yes. A button that placed a real phone call and burned
    * forty-five seconds on one accidental thumb would be indefensible.
    */
+  /**
+   * One button, three meanings, and the host controls which.
+   *
+   * Locked → asking. Granted → actually dialling. The middle state exists so a
+   * careless thumb cannot spend forty-five seconds of a six-minute round, while
+   * the host's permission still means something.
+   */
   async function askForLifeline() {
     if (lifelineSpent || roundOver) return;
     try {
-      await act(
-        requestedByMe
-          ? { type: "cancel_lifeline" }
-          : { type: "request_lifeline", playerId: session.player.id },
-      );
+      if (lifelineGranted) {
+        await act({ type: "use_lifeline", playerId: session.player.id });
+      } else if (requestedByMe) {
+        await act({ type: "cancel_lifeline" });
+      } else {
+        await act({ type: "request_lifeline", playerId: session.player.id });
+      }
     } catch {
-      // The host can still offer it verbally; nothing is lost.
+      // The host can still dial it himself; nothing is lost.
     }
   }
+
 
   /**
    * Once the round ends, this handset stops being a control surface and becomes
@@ -470,19 +498,18 @@ function Console({ code, session }: { code: string; session: Joined }) {
               {formatClock(secondsLeft)}
             </p>
             <div className="mt-1 flex items-center justify-end gap-1.5">
-              <span
-                className={`lamp ${connected ? "lamp-on lamp-green" : "lamp-on lamp-red"}`}
-              />
-              <span className="label-dim">
-                {connected ? "linked" : "reconnecting"}
-              </span>
+              {connected ? (
+                <Wifi size={12} style={{ color: "var(--signal-green)" }} />
+              ) : (
+                <WifiOff size={12} style={{ color: "var(--signal-red)" }} />
+              )}
             </div>
           </div>
         </div>
 
         {/* -- wires ------------------------------------------------------- */}
         <section className="mt-6">
-          <p className="label mb-2">Taar</p>
+          <p className="label mb-2 flex items-center gap-1.5"><Scissors size={11} />Taar</p>
           <div className="panel flex justify-between gap-2 p-3">
             {(game?.wires ?? []).map((w) => (
               <WirePip
@@ -497,9 +524,10 @@ function Console({ code, session }: { code: string; session: Joined }) {
 
         {/* -- question ---------------------------------------------------- */}
         <section className="mt-5">
-          <p className="label mb-2">
+          <p className="label mb-2 flex items-center gap-1.5">
+            <Lightbulb size={11} />
             {game?.activeWire
-              ? `Sawaal — ${WIRE_LABELS_HI[game.activeWire as WireColor]} taar`
+              ? WIRE_LABELS_HI[game.activeWire as WireColor] + " taar"
               : "Sawaal"}
           </p>
           <div className="panel-sunken min-h-24 p-4">
@@ -593,47 +621,57 @@ function Console({ code, session }: { code: string; session: Joined }) {
           <button
             onClick={askForLifeline}
             disabled={lifelineSpent || roundOver}
-            className="panel flex flex-col items-center justify-center gap-1 p-3 text-center transition-colors disabled:opacity-45"
+            className="panel flex flex-col items-center justify-center gap-1.5 p-3 text-center transition-colors disabled:opacity-45"
             style={{
               borderColor: lifelineActive
                 ? "var(--signal-amber)"
+                : lifelineGranted
+                  ? "var(--signal-green)"
+                  : requestedByMe
+                    ? "var(--brass)"
+                    : undefined,
+              background: lifelineGranted && !lifelineActive
+                ? "color-mix(in srgb, var(--signal-green) 12%, var(--ink-raised))"
                 : requestedByMe
-                  ? "var(--brass)"
+                  ? "color-mix(in srgb, var(--brass) 14%, var(--ink-raised))"
                   : undefined,
-              background: requestedByMe
-                ? "color-mix(in srgb, var(--brass) 14%, var(--ink-raised))"
-                : undefined,
             }}
           >
-            <span className="label">Phone a friend</span>
-            <span className="display text-xl uppercase">
+            {lifelineActive ? (
+              <PhoneCall size={22} className="animate-pulse" style={{ color: "var(--signal-amber)" }} />
+            ) : lifelineSpent ? (
+              <PhoneCall size={22} style={{ color: "var(--cream-faint)" }} />
+            ) : lifelineGranted ? (
+              <PhoneCall size={22} style={{ color: "var(--signal-green)" }} />
+            ) : (
+              <Lock size={22} style={{ color: "var(--cream-faint)" }} />
+            )}
+            <span className="display text-lg uppercase leading-none">
               {lifelineActive
                 ? "On call"
                 : lifelineSpent
-                  ? "Spent"
-                  : requestedByMe
-                    ? "Poocha hai"
-                    : requestedBySomeone
-                      ? "Maanga gaya"
-                      : "Maango"}
+                  ? "Ho gaya"
+                  : lifelineGranted
+                    ? "Call karo"
+                    : requestedByMe
+                      ? "Poocha hai"
+                      : "Lifeline"}
             </span>
-            <span className="text-xs" style={{ color: "var(--cream-faint)" }}>
+            <span className="text-[0.65rem] leading-tight" style={{ color: "var(--cream-faint)" }}>
               {lifelineActive
-                ? "Mic band hai"
+                ? "Mic band"
                 : lifelineSpent
-                  ? "Ho chuka"
-                  : requestedByMe
-                    ? "Tap to cancel"
-                    : session.player.hasPhone
-                      ? "45 second lagenge"
-                      : "Number nahi diya"}
+                  ? "—"
+                  : lifelineGranted
+                    ? "−45s"
+                    : "Host se maango"}
             </span>
           </button>
         </section>
 
         {/* Who else the host can hear — makes contested states legible. */}
         <section className="mt-6">
-          <p className="label mb-2">Kaun on air hai</p>
+          <p className="label mb-2 flex items-center gap-1.5"><Users size={11} />On air</p>
           <div className="flex flex-wrap gap-2">
             {(game?.players ?? []).map((p) => {
               const isLive = (game?.live ?? []).includes(p.id);
@@ -713,9 +751,10 @@ function Summary({
         <p className="label">Room {game.code} · Round khatam</p>
 
         <h1
-          className="display mt-2 text-6xl uppercase leading-none"
+          className="display mt-2 flex items-center gap-3 text-6xl uppercase leading-none"
           style={{ color: won ? "var(--signal-green)" : "var(--signal-red)" }}
         >
+          {won ? <Trophy size={44} /> : <Flame size={44} />}
           {won ? "Defused" : "Phat gaya"}
         </h1>
 
@@ -727,7 +766,7 @@ function Summary({
 
         {/* The personal line — the reason this lives on a phone and not a wall. */}
         <section className="panel mt-6 p-5">
-          <p className="label mb-1">Aapne kaate</p>
+          <p className="label mb-1 flex items-center gap-1.5"><Scissors size={11} />Aapne kaate</p>
           <p
             className="display text-5xl leading-none"
             style={{ color: seatColor }}
@@ -747,14 +786,16 @@ function Summary({
 
         <section className="mt-3 grid grid-cols-2 gap-3">
           <Stat
-            label={won ? "Bacha time" : "Time survive"}
+            icon={<Clock size={11} />}
+            label={won ? "Bacha" : "Chala"}
             value={formatClock(game.secondsLeft)}
           />
-          <Stat label="Hints liye" value={String(game.hintsUsed)} />
-          <Stat label="Galat jawab" value={String(game.wrongAnswers)} />
+          <Stat icon={<Lightbulb size={11} />} label="Hints" value={String(game.hintsUsed)} />
+          <Stat icon={<XCircle size={11} />} label="Galat" value={String(game.wrongAnswers)} />
           <Stat
-            label="Phone a friend"
-            value={game.lifeline.used ? "Use hui" : "Bach gayi"}
+            icon={<PhoneCall size={11} />}
+            label="Lifeline"
+            value={game.lifeline.used ? "Use hui" : "Bachi"}
           />
         </section>
 
@@ -777,7 +818,7 @@ function Summary({
 
         {game.players.length > 1 && (
           <section className="panel mt-3 p-4">
-            <p className="label mb-3">Scoreboard</p>
+            <p className="label mb-3 flex items-center gap-1.5"><Users size={11} />Scoreboard</p>
             <div className="space-y-2">
               {board.map((p) => (
                 <div key={p.id} className="flex items-center gap-3">
@@ -809,23 +850,41 @@ function Summary({
           </section>
         )}
 
+        <a
+          href="/"
+          className="btn btn-brass mt-6 flex w-full items-center justify-center gap-2 py-4"
+        >
+          <Home size={16} />
+          Main menu
+        </a>
+
         <p
-          className="mt-6 text-center text-xs leading-relaxed"
+          className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs"
           style={{ color: "var(--cream-faint)" }}
         >
-          Aapka number delete ho gaya. Mic band hai.
-          <br />
-          Bade screen par dekhiye.
+          <MicOff size={12} />
+          Number delete ho gaya · mic band
         </p>
       </div>
     </main>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: React.ReactNode;
+}) {
   return (
     <div className="panel p-4">
-      <p className="label-dim mb-1">{label}</p>
+      <p className="label-dim mb-1 flex items-center gap-1.5">
+        {icon}
+        {label}
+      </p>
       <p className="numerals text-2xl leading-none">{value}</p>
     </div>
   );
@@ -959,7 +1018,7 @@ function HoldToTalk({
         setHeld(false);
         send(false);
       }}
-      className="panel flex flex-col items-center justify-center gap-1 p-3 text-center transition-colors disabled:opacity-40"
+      className="panel flex flex-col items-center justify-center gap-1.5 p-3 text-center transition-colors disabled:opacity-40"
       style={{
         borderColor: held ? "var(--brass)" : undefined,
         background: held
@@ -967,12 +1026,12 @@ function HoldToTalk({
           : undefined,
       }}
     >
-      <span className="label">Hold to talk</span>
-      <span className="display text-xl uppercase">
+      <Hand size={22} style={{ color: held ? "var(--brass)" : "var(--cream-faint)" }} />
+      <span className="display text-lg uppercase leading-none">
         {held ? "Bolo" : "Dabao"}
       </span>
-      <span className="text-xs" style={{ color: "var(--cream-faint)" }}>
-        Pakka attribution
+      <span className="text-[0.65rem] leading-tight" style={{ color: "var(--cream-faint)" }}>
+        Hold to talk
       </span>
     </button>
   );

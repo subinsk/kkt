@@ -63,6 +63,19 @@ export async function startLifeline(game: Game, playerId: string) {
   const player = findPlayer(game, playerId);
   if (!player) throw new Error(`No such contestant: ${playerId}`);
 
+  /**
+   * Permission is checked here, not in the UI.
+   *
+   * The button being disabled is a courtesy; this is the actual gate. A phone
+   * with a stale page, or anything replaying an old request, must not be able to
+   * spend forty-five seconds of somebody's round.
+   */
+  if (!game.lifeline.granted) {
+    throw new Error(
+      "The host has not approved the lifeline yet. Ask them out loud first, and only call this once they have said yes.",
+    );
+  }
+
   if (!game.activeWire) {
     throw new Error(
       "No wire is active, so there is no hint to read out. Select a wire first.",

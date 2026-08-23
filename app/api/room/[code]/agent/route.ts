@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { RtcTokenBuilder, RtcRole } from "agora-token";
 import { APP_CERTIFICATE, appId } from "@/lib/env";
 import {
+  agentIsGone,
+  agentStatus,
   agoraFetch,
   buildAgentProperties,
   interruptAgent,
@@ -27,6 +29,35 @@ const agents: Map<string, string> = (globalAgents.__kktAgents ??= new Map());
 
 export function agentIdFor(code: string): string | undefined {
   return agents.get(code.toUpperCase());
+}
+
+/**
+ * Has the agent we remember actually left the room?
+ *
+ * The map is a memory, not a fact. An agent can exit on its own — idle timeout,
+ * a crash, an Agora-side reap — and nothing tells us. Before this check, the
+ * stale id made `start` return `alreadyRunning` forever and the host never came
+ * back: the projector said everything was fine and the room sat in silence. The
+ * only way out was restarting the dev server, which is not a thing you can do
+ * with judges watching.
+ *
+ * Deliberately conservative: only a definite "gone" counts. If Agora is
+ * unreachable or answers something unexpected we assume the agent is alive,
+ * because a duplicate host talking over itself is worse on stage than a Kill
+ * button the operator has to press once.
+ */
+async function hasLeft(agentId: string): Promise<boolean> {
+  try {
+    const { status } = await agentStatus(agentId);
+    // Docs pair the names with numbers — IDLE 0, STARTING 1, RUNNING 2,
+    // STOPPING 3, STOPPED 4, FAILED 6 — and do not promise which form the JSON
+    // carries, so accept either.
+    const state = String(status).toUpperCase();
+    const live = ["RUNNING", "STARTING", "1", "2"];
+    return !live.includes(state);
+  } catch (error) {
+    return agentIsGone(error);
+  }
 }
 
 export async function GET(
@@ -60,7 +91,13 @@ export async function POST(
 
     if (action === "start") {
       if (existing) {
-        return NextResponse.json({ agentId: existing, alreadyRunning: true });
+        if (!(await hasLeft(existing))) {
+          return NextResponse.json({ agentId: existing, alreadyRunning: true });
+        }
+        // It is gone. Forget it and join a fresh one, rather than reporting a
+        // host that is not there.
+        agents.delete(game.code);
+        emit(game, "agent_reaped", { agentId: existing });
       }
 
       /**
@@ -143,7 +180,22 @@ export async function POST(
     }
 
     if (action === "stop") {
-      await agoraFetch(`/agents/${existing}/leave`, { method: "POST" });
+      /**
+       * Stop means "there is no host in this room afterwards".
+       *
+       * If Agora says the session is already gone, that goal is met — so drop
+       * the id and report success instead of an error. Before this, a 404 left
+       * the dead id in the map with no way to clear it, which turned Kill into
+       * a button that permanently broke Start.
+       */
+      try {
+        await agoraFetch(`/agents/${existing}/leave`, { method: "POST" });
+      } catch (error) {
+        if (!agentIsGone(error)) throw error;
+        agents.delete(game.code);
+        emit(game, "agent_reaped", { agentId: existing });
+        return NextResponse.json({ stopped: true, alreadyGone: true });
+      }
       agents.delete(game.code);
       emit(game, "agent_stopped", { agentId: existing });
       return NextResponse.json({ stopped: true });

@@ -143,6 +143,7 @@ export function createGame(opts?: {
       callId: null,
       status: "idle",
       penaltyApplied: false,
+      granted: false,
       requestedBy: null,
     },
     wrongAnswers: [],
@@ -601,6 +602,7 @@ export function beginLifeline(game: Game, playerId: string, callId: string) {
     callId,
     status: "dialing",
     penaltyApplied: false,
+    granted: true,
     // The request has been acted on.
     requestedBy: null,
   };
@@ -644,6 +646,9 @@ export function lifelineFailed(game: Game, reason: string) {
     callId: null,
     status: "failed",
     penaltyApplied: false,
+    // Permission survives the failure. They were told yes; a carrier fault is
+    // not a reason to make them ask again.
+    granted: true,
     requestedBy: null,
   };
 
@@ -670,6 +675,28 @@ export function requestLifeline(game: Game, playerId: string) {
     playerId,
     playerName: player.name,
     hasNumber: player.phoneE164 !== null,
+  });
+  return game.lifeline;
+}
+
+/**
+ * The host says yes.
+ *
+ * Unlocks the button without dialling. The contestant still has to press it,
+ * which keeps the irreversible, clock-spending act in the hand of the person
+ * whose clock it is.
+ */
+export function grantLifeline(game: Game, playerId?: string | null) {
+  if (game.lifeline.used) throw new Error("The lifeline has already been used.");
+
+  game.lifeline.granted = true;
+  const target = playerId ?? game.lifeline.requestedBy;
+  if (target) game.lifeline.requestedBy = target;
+
+  const player = target ? findPlayer(game, target) : undefined;
+  emit(game, "lifeline_granted", {
+    playerId: target ?? null,
+    playerName: player?.name ?? null,
   });
   return game.lifeline;
 }
@@ -735,6 +762,20 @@ export function endGame(
   };
 
   emit(game, "game_over", summary);
+
+  /**
+   * Silence the host.
+   *
+   * Fire-and-forget on purpose: the round is already over on every screen and a
+   * slow REST call must not hold that up. If it fails the agent idles out on its
+   * own — but leaving him talking over the scoreboard is the worse outcome, so
+   * it is always attempted.
+   */
+  void fetch(`http://127.0.0.1:${process.env.PORT ?? 3000}/api/room/${game.code}/agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "stop" }),
+  }).catch(() => {});
 
   // Consent was for one round. Drop the numbers the moment it ends — spec §9.6.
   for (const player of game.players) player.phoneE164 = null;
