@@ -126,8 +126,11 @@ export async function POST(
        */
       case "use_lifeline": {
         if (!body.playerId) throw new Error("playerId required");
-        const result = await startLifeline(game, body.playerId);
-        return NextResponse.json({ ...publicView(game), lifeline: result });
+        // `call`, not `lifeline`: startLifeline returns call metadata, and
+        // spreading it over publicView's `lifeline` wiped `granted` and `used`
+        // on the client — so the button broke the instant it was pressed.
+        const call = await startLifeline(game, body.playerId);
+        return NextResponse.json({ ...publicView(game), call });
       }
 
       /** Host console override, for when he cannot hear the room. */

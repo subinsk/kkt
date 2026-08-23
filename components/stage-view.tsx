@@ -279,13 +279,32 @@ export default function StageView({ code }: { code: string }) {
 
       {/* Hand the camera back to the automatic shot. Bottom-left, out of the
           way of the chyron, and unobtrusive until you have moved something. */}
-      <button
-        onClick={() => setResetToken((n) => n + 1)}
-        className="btn absolute bottom-28 left-8 z-10 px-3 py-1.5 text-[0.7rem] opacity-45 hover:opacity-100"
-        title="Drag to orbit · scroll to zoom · right-drag to pan"
-      >
-        Reset camera
-      </button>
+      <div className="absolute bottom-8 left-8 z-10 flex items-center gap-2">
+        <button
+          onClick={() => setResetToken((n) => n + 1)}
+          className="btn px-3 py-1.5 text-[0.7rem] opacity-45 hover:opacity-100"
+          title="Drag to orbit · scroll to zoom · right-drag to pan"
+        >
+          Reset camera
+        </button>
+        {/**
+         * The way to the operator's panel for THIS room.
+         *
+         * Without it the only route to /host/<code> was typing the code by hand,
+         * which is how you end up with the console watching a different room
+         * than the phones joined — it reports zero contestants and looks broken
+         * when everything is working correctly.
+         */}
+        <a
+          href={`/host/${code}`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn px-3 py-1.5 text-[0.7rem] opacity-45 hover:opacity-100"
+          title="Operator controls for this room"
+        >
+          Host panel
+        </a>
+      </div>
 
       {/* Studio vignette + scanlines, over the render. */}
       <div className="vignette scanlines pointer-events-none absolute inset-0" />

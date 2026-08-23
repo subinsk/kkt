@@ -77,9 +77,17 @@ export async function startLifeline(game: Game, playerId: string) {
   }
 
   if (!game.activeWire) {
-    throw new Error(
-      "No wire is active, so there is no hint to read out. Select a wire first.",
-    );
+    // Not a throw. The contestant pressed a button they were told was live, and
+    // "nothing happened" is the worst possible answer — say what is missing.
+    return {
+      call_id: null,
+      status: "failed" as const,
+      wire: null,
+      cost_seconds: 0,
+      instruction:
+        "No wire is selected, so there is no hint to read down the phone. Pick a wire first, then use the lifeline.",
+      error: "Pehle koi taar chuniye — phir lifeline.",
+    };
   }
 
   // A fallback number keeps the demo alive when a judge declines to give

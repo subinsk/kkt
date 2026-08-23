@@ -260,6 +260,12 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const [peerMode, setPeerMode] = useState(true);
   const [pending, setPending] = useState(false);
   const [hostSaid, setHostSaid] = useState<string | null>(null);
+  const [lifelineNote, setLifelineNote] = useState<string | null>(null);
+
+  /** Drop a stale lifeline message the moment the host acts on it. */
+  useEffect(() => {
+    if (game?.lifeline.granted) setLifelineNote(null);
+  }, [game?.lifeline.granted]);
 
   /** Feed the speech bubble in the handset's own view of the set. */
   useEffect(
@@ -384,20 +390,41 @@ function Console({ code, session }: { code: string; session: Joined }) {
    * careless thumb cannot spend forty-five seconds of a six-minute round, while
    * the host's permission still means something.
    */
+  /**
+   * One button, three meanings, and the host controls which.
+   *
+   * Locked → asking. Granted → dialling. The middle state exists so a careless
+   * thumb cannot spend forty-five seconds of a six-minute round while the host's
+   * permission still means something.
+   *
+   * Every failure surfaces. This used to swallow errors, which made "the host
+   * has not granted it yet", "no wire is selected" and "Vobiz is down" all look
+   * identical to a dead button — unfixable by the person holding the phone.
+   */
   async function askForLifeline() {
     if (lifelineSpent || roundOver) return;
+    setLifelineNote(null);
     try {
       if (lifelineGranted) {
-        await act({ type: "use_lifeline", playerId: session.player.id });
+        const next = (await act({
+          type: "use_lifeline",
+          playerId: session.player.id,
+        })) as unknown as { call?: { error?: string; status?: string } };
+        if (next.call?.error) setLifelineNote(next.call.error);
+        else setLifelineNote("Phone laga rahe hain…");
       } else if (requestedByMe) {
         await act({ type: "cancel_lifeline" });
       } else {
         await act({ type: "request_lifeline", playerId: session.player.id });
+        setLifelineNote("Host se poochha hai — ruko.");
       }
-    } catch {
-      // The host can still dial it himself; nothing is lost.
+    } catch (err) {
+      setLifelineNote(
+        err instanceof Error ? err.message : "Lifeline nahi chali.",
+      );
     }
   }
+
 
 
   /**
@@ -669,6 +696,15 @@ function Console({ code, session }: { code: string; session: Joined }) {
             </span>
           </button>
         </section>
+
+        {lifelineNote && (
+          <p
+            className="mt-2 text-center text-xs"
+            style={{ color: "var(--signal-amber)" }}
+          >
+            {lifelineNote}
+          </p>
+        )}
 
         {/* Who else the host can hear — makes contested states legible. */}
         <section className="mt-6">
