@@ -74,25 +74,47 @@ export default function StageView({ code }: { code: string }) {
    */
   useEffect(() => {
     let alive = true;
-    fetch(`/api/join-url?code=${encodeURIComponent(code)}`)
-      .then((r) => r.json())
-      .then((d: { joinUrl?: string; reachable?: boolean }) => {
-        if (!alive) return;
-        const url = d.joinUrl ?? `${window.location.origin}/join/${code}`;
-        setJoinUrl(url);
-        setQrWarning(d.reachable === false);
-        return QRCode.toDataURL(url, {
+
+    const render = async () => {
+      // Ask the server where the QR should point. It is the only side that
+      // knows whether a tunnel or a deployment URL sits in front of us.
+      let url = `${window.location.origin}/join/${code}`;
+      let reachable = !/localhost|127\.0\.0\.1/i.test(window.location.origin);
+
+      try {
+        const res = await fetch(`/api/join-url?code=${encodeURIComponent(code)}`);
+        if (res.ok) {
+          const d = (await res.json()) as {
+            joinUrl?: string;
+            reachable?: boolean;
+          };
+          if (d.joinUrl) url = d.joinUrl;
+          if (typeof d.reachable === "boolean") reachable = d.reachable;
+        }
+      } catch {
+        // Fall through to the origin-derived URL below. A QR pointing at the
+        // wrong host is still better than no QR — the whole screen exists to be
+        // scanned, and an empty box tells a contestant nothing.
+      }
+
+      if (!alive) return;
+      setJoinUrl(url);
+      setQrWarning(!reachable);
+
+      try {
+        const png = await QRCode.toDataURL(url, {
           margin: 1,
           width: 320,
           color: { dark: "#f2ece2ff", light: "#00000000" },
           errorCorrectionLevel: "M",
-        }).then((png) => {
-          if (alive) setQr(png);
         });
-      })
-      .catch(() => {
+        if (alive) setQr(png);
+      } catch {
         if (alive) setQr(null);
-      });
+      }
+    };
+
+    void render();
     return () => {
       alive = false;
     };
