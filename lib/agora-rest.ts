@@ -260,12 +260,24 @@ export function buildAgentProperties(opts: {
       enable_metrics: true,
       enable_error_message: true,
       silence_config: {
-        // Long enough that thinking is not treated as a problem — a riddle takes
-        // a while, and interrupting that is worse than a pause.
-        timeout_ms: 25000,
+        /**
+         * Three and a half seconds.
+         *
+         * Broadcast pacing, not chat pacing: three seconds of dead air on a game
+         * show is an eternity, and a host who lets it sit reads as broken rather
+         * than patient. The extra half-second absorbs end-of-speech detection so
+         * a contestant drawing breath mid-answer is not treated as silence.
+         *
+         * The risk this creates is a host who natters over people thinking, so
+         * two things hold it back: the escalation ladder means each prod is a new
+         * step rather than a repeat, and the prompt requires an EMPTY response
+         * when everyone is in Peer Talk — where he cannot be heard anyway, and
+         * where filling the gap would just talk over their discussion.
+         */
+        timeout_ms: 3500,
         action: "think",
         content:
-          "Nobody has answered for a while. Follow your escalation ladder: nudge by name, then rephrase the riddle, then offer the hint with its cost, then offer to park the wire. Pick the NEXT step you have not used yet on this wire, do exactly that one thing in Devanagari, in one short sentence, and stop. Do not greet, do not re-introduce the show, do not start a new riddle.",
+          "A few seconds have passed with no answer. If LIVE STATE says every contestant is in Peer Talk, reply with an EMPTY response and say nothing at all — they cannot hear you and they are mid-discussion. Otherwise take the NEXT step on your escalation ladder that you have not already used on this wire: nudge by name, then rephrase the riddle in different words, then offer the hint with its cost, then offer to park the wire. Exactly one step, one short sentence, Devanagari. Never greet, never re-introduce the show, never start a new riddle, never repeat a sentence you have already said.",
       },
     },
   };
