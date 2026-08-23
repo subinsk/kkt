@@ -119,7 +119,7 @@ export function buildAgentProperties(opts: {
       system_messages: [{ role: "system", content: opts.systemPrompt }],
       max_history: 40,
       greeting_message: opts.greeting,
-      failure_message: "Ek minute... line mein kuch gadbad hai.",
+      failure_message: "एक मिनट... लाइन में कुछ गड़बड़ है।",
       params: { model: optional("LLM_MODEL", "gpt-4o-mini"), stream: true },
     },
 
@@ -201,11 +201,13 @@ export function buildAgentProperties(opts: {
         // naming this exact path — the nested key differs from the one used by
         // `trigger`, which really does take `config`.
         static_config: {
+          // Devanagari, for the same reason as everything else spoken: Bulbul
+          // reads Roman script as English.
           phrases: [
-            "Ek minute...",
-            "Main taar trace kar raha hoon...",
-            "Dekhte hain...",
-            "Computer ji, jawab dikhaiye...",
+            "एक मिनट...",
+            "मैं तार ट्रेस कर रहा हूँ...",
+            "देखते हैं...",
+            "कंप्यूटर जी, जवाब दिखाइए...",
           ],
           selection_rule: "shuffle",
         },

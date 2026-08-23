@@ -307,58 +307,16 @@ export default function StageView({ code }: { code: string }) {
         })}
       </div>
 
-      {/* ------------------------------------------------------ chyron --- */}
       {/**
-       * Lower third. This carries the room when ASR is imperfect and makes the
-       * conversation legible to people standing at the back — the single
-       * highest-value piece of UI on this screen.
+       * No lower-third chyron.
+       *
+       * It used to run the question and the last transcript along the bottom of
+       * the frame. It went because the speech bubble does the same job better:
+       * text attached to the person saying it reads as speech, where a caption
+       * bar at the foot of the screen reads as a subtitle and competes with the
+       * set for attention. The riddle also stays on every contestant's phone,
+       * which is where they actually look while answering.
        */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0">
-        <div
-          className="border-t px-8 py-4"
-          style={{
-            background:
-              "linear-gradient(180deg, transparent, rgb(6 5 4 / 0.94) 38%)",
-            borderColor: "var(--rule)",
-          }}
-        >
-          <div className="flex items-end gap-6">
-            <div
-              className="shrink-0 px-3 py-1"
-              style={{ background: "var(--brass)", color: "#1a1206" }}
-            >
-              <span className="display text-xl uppercase leading-none">
-                {game.activeWire
-                  ? `${WIRE_LABELS_HI[game.activeWire as WireColor]} taar`
-                  : "Sawaal"}
-              </span>
-            </div>
-            <p className="min-h-8 flex-1 text-2xl leading-snug">
-              {caption ??
-                (game.activeWire
-                  ? "…"
-                  : "Amitabh bhai poochhenge — kis taar se shuru karein?")}
-            </p>
-            {/* Lifeline status, right-aligned in the chyron. A phone ringing
-                in the room is the beat judges remember, so the screen has to
-                say what is happening while it happens. */}
-            {(game.lifeline.activeFor || game.lifeline.requestedBy) && (
-              <span
-                className="label shrink-0 animate-pulse"
-                style={{ color: "var(--signal-amber)" }}
-              >
-                {game.lifeline.status === "connected"
-                  ? "friend on the line"
-                  : game.lifeline.status === "ringing"
-                    ? "ringing…"
-                    : game.lifeline.status === "dialing"
-                      ? "calling…"
-                      : "lifeline requested"}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
 
       {/* ------------------------------------------------------ outcome --- */}
       {(game.phase === "won" || game.phase === "lost") && (
