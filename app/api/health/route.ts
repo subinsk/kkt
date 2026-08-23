@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { isSet, optional, resolvePublicBase } from "@/lib/env";
 import { RIDDLES } from "@/lib/game/riddles";
 import { listGames } from "@/lib/game/store";
@@ -22,7 +22,30 @@ export const dynamic = "force-dynamic";
  *
  * None of those announce themselves at runtime. All of them are visible here.
  */
-export async function GET() {
+/**
+ * Is a clip actually fetchable?
+ *
+ * On disk first, because that is free and it is the whole story on Render and
+ * locally. But on Vercel `public/` is served by the CDN and is *not* on the
+ * function's filesystem, so `existsSync` returns false for files that are being
+ * served perfectly well. Reporting those as missing would be a false alarm on
+ * every single deploy.
+ *
+ * The question that actually matters is the one Vobiz asks — can this URL be
+ * fetched — so when the disk says no, ask over HTTP before believing it.
+ */
+async function reachable(localPath: string, url: string): Promise<boolean> {
+  if (existsSync(localPath)) return true;
+  if (!url) return false;
+  try {
+    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function GET(request: NextRequest) {
   const keys = {
     agora_app_id: isSet("NEXT_PUBLIC_AGORA_APP_ID") || isSet("AGORA_APP_ID"),
     agora_app_certificate: isSet("AGORA_APP_CERTIFICATE"),
@@ -42,23 +65,47 @@ export async function GET() {
   const { url: publicBase, source: publicBaseSource } = resolvePublicBase();
   const audioDir = join(process.cwd(), "public", "audio");
 
-  // Checked on disk rather than trusted, because a missing file here is
-  // inaudible rather than loud.
-  const hintAudio = RIDDLES.map((r) => ({
-    riddle: r.id,
-    file: `/audio/hints/${r.id}_h1.wav`,
-    present: existsSync(join(audioDir, "hints", `${r.id}_h1.wav`)),
-  }));
+  // Verified rather than trusted, because a missing file here is inaudible
+  // rather than loud.
+  const hintAudio = await Promise.all(
+    RIDDLES.map(async (r) => ({
+      riddle: r.id,
+      file: `/audio/hints/${r.id}_h1.wav`,
+      present: await reachable(
+        join(audioDir, "hints", `${r.id}_h1.wav`),
+        publicBase ? `${publicBase}/audio/hints/${r.id}_h1.wav` : "",
+      ),
+    })),
+  );
 
-  const outcomeAudio = [
-    { name: "win", file: "win_wah_kya_baat_hai.wav" },
-    { name: "lose", file: "lose_aag_aag.wav" },
-  ].map((a) => ({
-    ...a,
-    present: existsSync(join(audioDir, "outcome", a.file)),
-  }));
+  const outcomeAudio = await Promise.all(
+    [
+      { name: "win", file: "win_wah_kya_baat_hai.wav" },
+      { name: "lose", file: "lose_aag_aag.wav" },
+    ].map(async (a) => ({
+      ...a,
+      present: await reachable(
+        join(audioDir, "outcome", a.file),
+        publicBase ? `${publicBase}/audio/outcome/${a.file}` : "",
+      ),
+    })),
+  );
 
   const blocking: string[] = [];
+  const warnings: string[] = [];
+
+  // Whoever actually answered this request, as opposed to whoever the env says
+  // we are. The two disagreeing is the whole point of the check below.
+  const servingHost =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
+  const baseHost = (() => {
+    try {
+      return new URL(publicBase).host;
+    } catch {
+      return "";
+    }
+  })();
+
   if (!keys.agora_app_id) blocking.push("NEXT_PUBLIC_AGORA_APP_ID is not set.");
   if (!keys.agora_app_certificate) {
     blocking.push("AGORA_APP_CERTIFICATE is not set — no client can join.");
@@ -82,9 +129,27 @@ export async function GET() {
     blocking.push(
       `PUBLIC_BASE_URL is still the placeholder (${publicBase}). Run: npx cloudflared tunnel --url http://localhost:3000`,
     );
+  } else if (servingHost && baseHost && servingHost !== baseHost) {
+    /**
+     * The split-brain check.
+     *
+     * A deployed service carrying someone's leftover cloudflared URL is a real
+     * thing that has happened here, and it is the worst kind of failure: the URL
+     * resolves, it looks legitimate, and every check above passes. But the
+     * phones mutate game state in *this* process while Agora fetches /api/llm
+     * from *that* one, so the host is handed state for a room that does not
+     * exist where it is looking. Nothing errors. The host simply makes no sense.
+     *
+     * Deliberately not blocking. A cloudflared tunnel in front of localhost
+     * mismatches on purpose, and so does any custom domain, so treating this as
+     * fatal would cry wolf in the two setups that are actually correct. Loud,
+     * not fatal.
+     */
+    warnings.push(
+      `PUBLIC_BASE_URL points at ${baseHost} but this request was served by ${servingHost}. Expected when a tunnel or custom domain is in front. NOT expected on a deployment — Agora and Vobiz would be sent to a different process than the one holding the game, which fails silently. If ${servingHost} is serving the game, unset PUBLIC_BASE_URL and let it be derived.`,
+    );
   }
 
-  const warnings: string[] = [];
   if (!keys.vobiz_auth_id || !keys.vobiz_auth_token || !keys.vobiz_from_number) {
     warnings.push(
       "Vobiz is not fully configured — Phone a Friend will fail (and refund, visibly).",
@@ -122,6 +187,7 @@ export async function GET() {
     // Which variable won. The most useful line in this payload when the
     // host speaks locally but not deployed, or vice versa.
     publicBaseSource,
+    servingHost,
     audio: { hints: hintAudio, outcome: outcomeAudio },
     riddles: RIDDLES.map((r) => ({ wire: r.wire, id: r.id })),
     liveRooms: listGames().map((g) => ({

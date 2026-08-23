@@ -7,6 +7,9 @@
 | **Render** | <https://kaun-katega-taarpati.onrender.com> | The one to demo. One long-lived Node process, so rooms and the SSE stream actually work. Free tier — spins down after ~15 min idle, so hit it once before showing anyone. |
 | **Vercel** | <https://kkt-omega.vercel.app/> | Serverless. The UI loads and the set renders, but for the reasons below a room does not survive between requests. Treat it as a shop window, not a playable build. |
 
+Neither is a fallback for the other: **the free tiers are not the constraint** — a
+long-lived process is. Render gives one; Vercel cannot.
+
 **These two do not talk to each other.** They are independent copies of the same
 app, each with its own memory and its own env. Nothing in the code points one at
 the other, and there is no state shared between them — a room started on Render
@@ -113,6 +116,27 @@ domain.
 Do not use Cloudflare Workers or Pages Functions. Same serverless problem, plus
 no Node runtime for `agora-token`.
 
+### The audio, on any host
+
+`public/audio/` is gitignored, so the clips are **built, not committed** — every
+host has to run `render:audio` itself or ship with silent lifelines:
+
+- Render: already in `buildCommand` in [`render.yaml`](../render.yaml).
+- Vercel: `buildCommand` in [`vercel.json`](../vercel.json), added for exactly
+  this reason — the default `npm run build` skipped it and the deploy had 0/5
+  hints and 0/2 stingers.
+
+Either way **`SARVAM_API_KEY` must be set for the environment being built**, not
+just at runtime. Without it the build still succeeds — deliberately, since a game
+with no lifeline audio beats a game that failed to deploy — so the only signal is
+the clip count in `/api/health`. Check it after every deploy.
+
+One wrinkle worth knowing: on Vercel `public/` is served by the CDN and is *not*
+on the function's filesystem, so an `existsSync` check reports every clip as
+missing even when they are served fine. `/api/health` therefore falls back to an
+HTTP `HEAD` when the disk says no, which is the question that actually matters —
+Vobiz fetches these over HTTP too.
+
 ---
 
 ## Wiring the public URL
@@ -151,8 +175,25 @@ push, so a preview deploy would hand Agora a URL that is already stale. And if
 Deployment Protection is on, the Vercel deploy cannot work regardless of the URL
 — Agora and Vobiz arrive unauthenticated and get the auth wall.
 
-`/api/health` reports `publicBaseSource`, so you can see which of the three won
-without guessing.
+`/api/health` reports `publicBaseSource` and `servingHost`, so you can see which
+of the three won without guessing.
+
+### The trap: a deployed service carrying a tunnel URL
+
+This has already happened here — both deploys were found carrying a developer's
+`*.trycloudflare.com` URL. It is the nastiest failure in the project because
+every check passes: the URL resolves, it looks legitimate, `/api/health` says
+`ready: true`.
+
+But the phones mutate game state in the *deployed* process while Agora fetches
+`/api/llm` from the *laptop*, so the host is handed state for a room that does
+not exist where it is looking. Nothing errors. The host just makes no sense.
+
+`/api/health` now warns when `PUBLIC_BASE_URL`'s host differs from the host that
+served the request. It is a warning and not blocking on purpose — a tunnel in
+front of localhost mismatches legitimately, and so does a custom domain — so read
+it in context. On a `*.onrender.com` or `*.vercel.app` request it means the env
+var is wrong: unset it and let the host supply the value.
 
 ---
 
