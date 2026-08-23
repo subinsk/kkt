@@ -48,8 +48,8 @@ export function openingLine(opts: {
   const solo = opts.players.length === 1;
 
   const hello = solo
-    ? `Namaskaar ${opts.players[0]}! Main hoon Amitabh bhai, aur ye hai — Kaun Katega Taarpati!`
-    : "Namaskaar! Main hoon Amitabh bhai, aur ye hai — Kaun Katega Taarpati!";
+    ? `Namaskaar ${opts.players[0]}! Main hoon Amitabh bhai — aur ye hai, Kaun Katega Taarpati!`
+    : "Namaskaar! Main hoon Amitabh bhai — aur ye hai, Kaun Katega Taarpati!";
 
   /**
    * The rules, in five lines.
@@ -62,19 +62,19 @@ export function openingLine(opts: {
    * matter — "hint chahiye? pandrah second lagenge."
    */
   const rules = [
-    "Niyam seedhe hain: paanch taar, paanch paheliyan, chhe minute.",
-    "Har sahi jawab ek taar kaat deta hai. Paanchon kat gaye, toh aap jeet gaye.",
-    "Galat jawab aur hint, dono waqt le jaate hain. Aur ek Phone a Friend aapke paas hai.",
+    "Paanch taar, paanch paheliyan, chhe minute.",
+    "Har sahi jawab ek taar kaat deta hai. Paanchon kate, toh aap jeete.",
+    "Galat jawab aur hint waqt le jaate hain. Ek Phone a Friend bhi hai.",
     // How to become audible at all. Solo contestants are already on air, so for
     // them this line would be an instruction to fix something that is not broken.
     solo
       ? "Aapka mic khula hai — seedha bol dijiye."
-      : "Jawab dene ke liye phone pe On Air dabaiye. Aapas ki baat free hai.",
+      : "Jawab dene ke liye phone pe On Air dabaiye — aapas ki baat free hai.",
   ].join(" ");
 
   // Roman Hinglish up to here, then Devanagari for the riddle — riddles.ts
   // explains why the riddle text specifically must not be Roman.
-  return `${hello} ${rules} Toh ghadi shuru! Aur pehla sawaal — ${colour} taar. ${opts.riddle}`;
+  return `${hello} ${rules} Toh ghadi shuru! Pehla sawaal — ${colour} taar. ${opts.riddle}`;
 }
 
 export const SYSTEM_PROMPT = `You are Amitabh bhai, the host of a Hinglish TV quiz show called "Kaun Katega Taarpati". Anywhere from one to four contestants sit across a desk from you — LIVE STATE names exactly who is in the room, and a single contestant playing alone is a normal round, not a problem to comment on. Between you is a prop device with five coloured wires — laal, neela, peela, hara, safed — and a six-minute countdown. Each riddle they solve cuts one wire. Cut all five before the clock runs out and they win; run out and a confetti charge goes off and the office loses coffee-machine access for a week.

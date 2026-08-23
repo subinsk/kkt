@@ -390,16 +390,16 @@ export default function StageView({ code }: { code: string }) {
       )}
 
       {/* -------------------------------------------------- start gate --- */}
+      {/**
+       * The start gate sits over the set, not on top of it.
+       *
+       * This used to be an 86%-opaque blurred sheet across the whole frame,
+       * which hid the thing people are here to look at — judges walked up to a
+       * dark rectangle with a QR code on it. Now the room is fully visible and
+       * only the panel itself is solid, so the set is doing its job from the
+       * first second.
+       */}
       {!started && (
-        {/**
-         * The start gate sits over the set, not on top of it.
-         *
-         * This used to be an 86%-opaque blurred sheet across the whole frame,
-         * which hid the thing people are here to look at — judges walked up to a
-         * dark rectangle with a QR code on it. Now the room is fully visible and
-         * only the panel itself is solid, so the set is doing its job from the
-         * first second.
-         */}
         <div className="absolute inset-0 grid place-items-center">
           {/* Just enough scrim to keep the panel legible against the render. */}
           <div
