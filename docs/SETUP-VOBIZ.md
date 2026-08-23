@@ -13,12 +13,23 @@ API reference: [VOBIZ.md](VOBIZ.md).
 
 Indian number, because DLT/TRAI verification is smoother on one.
 
-## 2. Copy the credentials
+## 2. Copy the credentials — from the DASHBOARD
 
-Console → **API / Credentials**. Two values:
+Console **home page** (`console.vobiz.ai/app` — click the vobiz logo top-left).
+The docs are explicit: "your Auth ID and Auth Token are displayed directly on the
+main dashboard."
 
-- **Auth ID** — looks like `MA_XXXXXXXX`
+- **Auth ID** — `MA_XXXXXXXX`
 - **Auth Token** — a long secret
+
+> **Do not use the SIP credentials page.** `console.vobiz.ai/app/sip/create-credentials`
+> is a completely different credential system — username/password for
+> authenticating SIP INVITEs from a softphone or a BYOC trunk. KKT never speaks
+> SIP; it calls the REST API. Creating a SIP credential there gets you nothing
+> and the values will not work as `VOBIZ_AUTH_ID` / `VOBIZ_AUTH_TOKEN`.
+>
+> (SIP trunking is only relevant to spec §9.8, the optional "judges can dial in
+> and reach the agent" path. That is not the lifeline and not needed.)
 
 Into `.env.local`:
 
@@ -53,13 +64,25 @@ With the plus, this one:
 FALLBACK_FRIEND_NUMBER=+919XXXXXXXXX
 ```
 
-## 5. Check trial limits
+## 5. Trial account — the likely blocker
 
-Trial accounts are usually **outbound-only** — fine, the lifeline is outbound.
-But confirm two things in the console now, not on the day:
+If the console shows *"You are currently on a trial account — complete your first
+recharge to convert to a full account and unlock all features"*, treat that as a
+real gate, not a nag.
 
-- outbound calling is enabled
-- there is credit on the account
+A wallet balance is **not** the same as a converted account. On a trial you may
+find you cannot buy a number at all, which blocks step 3, which blocks
+everything — `from` has to be a number you own.
+
+So check, in this order:
+
+1. Can you actually complete **Numbers → Buy Number**? If yes, the trial is not
+   blocking you.
+2. If it refuses, do the minimum recharge to convert the account, then buy.
+3. Confirm outbound calling is enabled for the account.
+
+Trial accounts are typically outbound-only, which is fine — the lifeline only
+ever dials out.
 
 ## 6. Test the raw API before touching the game
 
@@ -134,3 +157,5 @@ happens when your external API fails", which the brief explicitly asks about.
 | Never rings, no error | `to` not E.164, or trial outbound not enabled |
 | Rings but clock never drops | `answer_url` unreachable, so `/api/vobiz/answer` never ran |
 | Worked yesterday, not today | `cloudflared` restarted and `PUBLIC_BASE_URL` is stale |
+| Cannot buy a number | Account still on trial — recharge to convert |
+| Auth values rejected | You copied SIP credentials instead of the dashboard Auth ID/Token |
