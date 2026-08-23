@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+_legacy/
+
+# Any local env variant, not just .env.local
+.env*.local
+.env.production
+
+# Rendered audio — regenerate with `npm run render:audio` (needs SARVAM_API_KEY)
+public/audio/hints/
+public/audio/outcome/

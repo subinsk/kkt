@@ -1,0 +1,259 @@
+@import "tailwindcss";
+
+/**
+ * Design language.
+ *
+ * Two reference points, deliberately: a 1990s Indian TV studio — brass, deep
+ * maroon, halogen warmth, heavy condensed titling — and a piece of bench test
+ * equipment, which is where the labelled panels, square status lamps and
+ * tabular numerals come from.
+ *
+ * Rules that hold everywhere:
+ *   - The black is WARM (#0a0806), never blue-black. Blue-black reads corporate;
+ *     this is a television set with hot lights in it.
+ *   - Almost nothing is rounded. Hard corners, hairline rules. The one pill is
+ *     the Peer Talk button, because it is the only thing meant to feel physical.
+ *   - Gradients are light sources, never decoration.
+ *   - Numerals are tabular and condensed. A clock whose digits change width
+ *     jitters, and this clock is on a projector.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Ground */
+  --ink: #0a0806;
+  --ink-raised: #14100c;
+  --ink-sunken: #060504;
+
+  /* Brass — the primary accent. Warm, slightly dirty, not yellow. */
+  --brass: #c9973f;
+  --brass-bright: #e8bd6d;
+  --brass-dim: #6b5327;
+
+  /* Oxblood — the studio backdrop colour. */
+  --oxblood: #3d0f12;
+  --oxblood-deep: #1e0709;
+
+  /* Signals */
+  --signal-red: #e5484d;
+  --signal-green: #3dd68c;
+  --signal-amber: #f5a524;
+
+  /* Type. Warm cream, never pure white — pure white on warm black buzzes. */
+  --cream: #f2ece2;
+  --cream-dim: #a89f92;
+  --cream-faint: #6b6459;
+
+  /* Seat colours, shared with SEAT_COLORS in lib/game/state.ts */
+  --seat-0: #ff6b4a;
+  --seat-1: #4ac8ff;
+  --seat-2: #ffd24a;
+  --seat-3: #7dff9e;
+
+  --rule: color-mix(in srgb, var(--brass) 18%, transparent);
+}
+
+* {
+  border-color: var(--rule);
+}
+
+body {
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Contestants hold these phones and jab at them under time pressure. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------------------------------------------------------------- type --- */
+
+.display {
+  font-family: var(--font-display), "Arial Narrow", sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 0.92;
+}
+
+/** Tabular so a counting clock does not shuffle sideways. */
+.numerals {
+  font-family: var(--font-display), "Arial Narrow", sans-serif;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: 0.01em;
+}
+
+/** The little brass labels above every panel. Borrowed from equipment fascia. */
+.label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+
+.label-dim {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--cream-faint);
+}
+
+/* -------------------------------------------------------------- panels --- */
+
+/**
+ * A panel is a flat block with a hairline rule and a 1px inner highlight along
+ * the top edge, which is what makes it read as a milled face catching light
+ * rather than a div with a border.
+ */
+.panel {
+  background: var(--ink-raised);
+  border: 1px solid var(--rule);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--brass) 10%, transparent);
+}
+
+.panel-sunken {
+  background: var(--ink-sunken);
+  border: 1px solid var(--rule);
+  box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.5);
+}
+
+/* ---------------------------------------------------------------- lamps --- */
+
+/** Square, not round. Round reads as a web dot; square reads as an indicator. */
+.lamp {
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--cream-faint);
+  opacity: 0.3;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.4);
+  transition: opacity 140ms, box-shadow 140ms, background-color 140ms;
+}
+
+.lamp-on {
+  opacity: 1;
+}
+
+.lamp-red { background: var(--signal-red); }
+.lamp-green { background: var(--signal-green); }
+.lamp-amber { background: var(--signal-amber); }
+
+.lamp-on.lamp-red { box-shadow: 0 0 10px var(--signal-red); }
+.lamp-on.lamp-green { box-shadow: 0 0 10px var(--signal-green); }
+.lamp-on.lamp-amber { box-shadow: 0 0 10px var(--signal-amber); }
+
+/* -------------------------------------------------------------- buttons --- */
+
+.btn {
+  font-family: var(--font-ui), sans-serif;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.6rem 1rem;
+  background: var(--ink-raised);
+  border: 1px solid var(--rule);
+  color: var(--cream);
+  cursor: pointer;
+  transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--brass);
+  background: color-mix(in srgb, var(--brass) 8%, var(--ink-raised));
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-brass {
+  background: var(--brass);
+  border-color: var(--brass-bright);
+  color: #1a1206;
+}
+
+.btn-brass:hover:not(:disabled) {
+  background: var(--brass-bright);
+  border-color: var(--brass-bright);
+  color: #1a1206;
+}
+
+.btn-danger {
+  border-color: color-mix(in srgb, var(--signal-red) 45%, transparent);
+  color: var(--signal-red);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--signal-red) 12%, var(--ink-raised));
+  border-color: var(--signal-red);
+}
+
+/* ------------------------------------------------------------- textures --- */
+
+/**
+ * Scanlines. Two pixels, four percent opacity — invisible if you look for it,
+ * but it stops large flat areas from looking like flat CSS.
+ */
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0.045) 0px,
+    rgb(0 0 0 / 0.045) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/** Studio vignette — hot in the middle, falls off at the edges. */
+.vignette::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 70% 60% at 50% 42%,
+    transparent 0%,
+    rgb(0 0 0 / 0.45) 100%
+  );
+}
+
+/* ------------------------------------------------------------ animation --- */
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/** Under a minute. On the beat, not a gentle fade. */
+.panic {
+  animation: pulse-red 0.6s steps(2, jump-none) infinite;
+  color: var(--signal-red);
+}
+
+@keyframes lamp-flare {
+  0% { opacity: 0.3; }
+  8% { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+
+.flare {
+  animation: lamp-flare 900ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panic { animation: none; color: var(--signal-red); }
+  .flare { animation: none; }
+}

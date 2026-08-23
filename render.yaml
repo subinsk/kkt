@@ -1,0 +1,76 @@
+# Render.com blueprint — free tier.
+#
+# Render rather than Vercel, and this is not a preference. KKT cannot run on
+# serverless at all:
+#
+#   - The game store is in-memory (lib/game/store.ts). Every serverless
+#     invocation is a fresh process, so the room would vanish between requests.
+#   - /api/room/[code]/events holds an SSE stream open for the whole round.
+#     Serverless functions are billed and capped by duration.
+#   - The running agent id lives in a module-level Map.
+#
+# So it needs ONE long-lived Node process. That is what a Render web service is.
+#
+# Caveat that matters on the day: the free tier spins down after ~15 minutes of
+# inactivity and takes 30–60s to wake. Hit the URL once before the demo.
+services:
+  - type: web
+    name: kaun-katega-taarpati
+    runtime: node
+    plan: free
+    region: singapore # closest to India — matters for RTC signalling latency
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+
+      # PUBLIC_BASE_URL must be this service's own https URL once it exists.
+      # Agora fetches /api/llm from it and Vobiz fetches the answer_url, so a
+      # wrong value here is silent: no voice, and dead air on the lifeline.
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+      - key: NEXT_PUBLIC_AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false
+
+      - key: SARVAM_API_KEY
+        sync: false
+
+      - key: LLM_PROVIDER
+        value: groq
+      - key: LLM_UPSTREAM_URL
+        value: https://api.groq.com/openai/v1/chat/completions
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_REASONING_EFFORT
+        value: low
+      - key: LLM_MAX_TOKENS
+        value: "1024"
+      - key: LLM_API_KEY
+        sync: false
+
+      - key: VOBIZ_AUTH_ID
+        sync: false
+      - key: VOBIZ_AUTH_TOKEN
+        sync: false
+      - key: VOBIZ_FROM_NUMBER
+        sync: false
+      - key: FALLBACK_FRIEND_NUMBER
+        sync: false
+
+      - key: SARVAM_TTS_SPEAKER
+        value: abhilash
+      - key: SARVAM_TTS_LANGUAGE
+        value: hi-IN
+      - key: SARVAM_ASR_LANGUAGE
+        value: unknown
+      - key: NEXT_PUBLIC_AUDIO_MODE
+        value: "A"
