@@ -433,7 +433,7 @@ export default function StageView({ code }: { code: string }) {
                 ? "Amitabh bhai aa rahe hain…"
                 : game.players.length === 0
                   ? "Kisi ka intezaar…"
-                  : "Ghadi shuru karo"}
+                  : "Game shuru karo"}
             </button>
 
             {note && (
