@@ -31,8 +31,11 @@ export const dynamic = "force-dynamic";
  * served perfectly well. Reporting those as missing would be a false alarm on
  * every single deploy.
  *
- * The question that actually matters is the one Vobiz asks — can this URL be
- * fetched — so when the disk says no, ask over HTTP before believing it.
+ * So when the disk says no, ask over HTTP before believing it — but ask *this*
+ * host, never PUBLIC_BASE_URL. Those can be different origins, and a check that
+ * probed PUBLIC_BASE_URL would happily report another process's files as proof
+ * that this build shipped them. Whether PUBLIC_BASE_URL is the right origin at
+ * all is a separate question, answered by the split-brain check below.
  */
 async function reachable(localPath: string, url: string): Promise<boolean> {
   if (existsSync(localPath)) return true;
@@ -63,6 +66,24 @@ export async function GET(request: NextRequest) {
   // supplies it, so checking only the explicit var would report a blocking
   // failure on a deployment that is in fact fine.
   const { url: publicBase, source: publicBaseSource } = resolvePublicBase();
+
+  /**
+   * Whoever actually answered this request, as opposed to whoever the env says
+   * we are. The two disagreeing is the whole point of the split-brain check
+   * further down.
+   */
+  const servingHost =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
+  const servingProto = request.headers.get("x-forwarded-proto") ?? "http";
+  const selfOrigin = servingHost ? `${servingProto}://${servingHost}` : "";
+  const baseHost = (() => {
+    try {
+      return new URL(publicBase).host;
+    } catch {
+      return "";
+    }
+  })();
+
   const audioDir = join(process.cwd(), "public", "audio");
 
   // Verified rather than trusted, because a missing file here is inaudible
@@ -73,7 +94,7 @@ export async function GET(request: NextRequest) {
       file: `/audio/hints/${r.id}_h1.wav`,
       present: await reachable(
         join(audioDir, "hints", `${r.id}_h1.wav`),
-        publicBase ? `${publicBase}/audio/hints/${r.id}_h1.wav` : "",
+        selfOrigin ? `${selfOrigin}/audio/hints/${r.id}_h1.wav` : "",
       ),
     })),
   );
@@ -86,25 +107,13 @@ export async function GET(request: NextRequest) {
       ...a,
       present: await reachable(
         join(audioDir, "outcome", a.file),
-        publicBase ? `${publicBase}/audio/outcome/${a.file}` : "",
+        selfOrigin ? `${selfOrigin}/audio/outcome/${a.file}` : "",
       ),
     })),
   );
 
   const blocking: string[] = [];
   const warnings: string[] = [];
-
-  // Whoever actually answered this request, as opposed to whoever the env says
-  // we are. The two disagreeing is the whole point of the check below.
-  const servingHost =
-    request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
-  const baseHost = (() => {
-    try {
-      return new URL(publicBase).host;
-    } catch {
-      return "";
-    }
-  })();
 
   if (!keys.agora_app_id) blocking.push("NEXT_PUBLIC_AGORA_APP_ID is not set.");
   if (!keys.agora_app_certificate) {
