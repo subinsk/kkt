@@ -286,6 +286,25 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const requestedBySomeone = Boolean(game?.lifeline.requestedBy);
   const roundOver = game?.phase === "won" || game?.phase === "lost";
 
+  /**
+   * How long the outcome beat holds before the scoreboard appears.
+   *
+   * Matched to the stinger plus the tail of the confetti and fire on the
+   * projector — long enough to feel like an ending, short enough that nobody is
+   * waiting for their score.
+   */
+  const [showBeat, setShowBeat] = useState(false);
+  useEffect(() => {
+    if (!roundOver) {
+      setShowBeat(false);
+      return;
+    }
+    setShowBeat(true);
+    const t = setTimeout(() => setShowBeat(false), 5200);
+    return () => clearTimeout(t);
+  }, [roundOver]);
+
+
   const agora = useAgora({
     role: "player",
     credentials: session.rtc,
@@ -441,6 +460,56 @@ function Console({ code, session }: { code: string; session: Joined }) {
    */
   // The server has forgotten this room. Everything below is stale.
   if (missing) return <RoomGone code={code} />;
+
+  /**
+   * Let the outcome land before the scoreboard takes the screen.
+   *
+   * The round ending used to swap straight to the summary, which cut the payoff
+   * off at the knees: the stinger is playing through the room speakers, the set
+   * is mid-confetti or mid-fireball, and every contestant is already staring at
+   * a table of statistics. The numbers are not the moment — the moment is the
+   * moment. So the phone shows the outcome over the set for as long as the beat
+   * runs, and only then becomes a scoreboard.
+   */
+  if (roundOver && showBeat && game) {
+    const won = game.phase === "won";
+    return (
+      <main className="relative min-h-dvh scanlines">
+        <div className="absolute inset-0">
+          <StageCanvas
+            game={game}
+            agentLevelRef={agora.agentLevelRef}
+            minimal
+            hostSaid={hostSaid}
+            className="absolute inset-0"
+          />
+        </div>
+        <div
+          className="absolute inset-0 grid place-items-center px-6 text-center"
+          style={{
+            background: won
+              ? "radial-gradient(ellipse at center, rgb(6 5 4 / 0.3), rgb(6 5 4 / 0.85))"
+              : "radial-gradient(ellipse at center, rgb(40 6 2 / 0.35), rgb(6 5 4 / 0.88))",
+          }}
+        >
+          <div>
+            <p
+              className="display text-6xl uppercase leading-none"
+              style={{
+                color: won ? "var(--signal-green)" : "var(--signal-red)",
+                textShadow: `0 0 50px ${won ? "#3dd68c" : "#e5484d"}`,
+              }}
+            >
+              {won ? "Defused" : "Phat gaya"}
+            </p>
+            <p className="mt-3 text-lg" style={{ color: "var(--cream-dim)" }}>
+              {won ? "Paanch mein se paanch!" : "Ghadi jeet gayi."}
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (roundOver && game) {
     return (
