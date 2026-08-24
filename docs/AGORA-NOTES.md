@@ -91,3 +91,150 @@ Also confirmed on the same page, same date: no documented character limit on
 `greeting_message` and `failure_message` support `{{variable_name}}` template
 substitution. `greeting_audio_url` over 2048 bytes returns a 400. ASR and
 interrupt keywords cap at 128 each.
+
+## `/speak` interrupts by default — 24 Aug 2026
+
+Source: `POST /v2/projects/{appid}/agents/{agentId}/speak`,
+<https://docs.agora.io/en/api-reference/api-ref/conversational-ai/speak>
+(fetched 24 Aug 2026).
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `text` | string | yes | — (max **512 bytes**) |
+| `priority` | string | no | **`INTERRUPT`** |
+| `interruptable` | boolean | no | `true` |
+
+The documented wording, because the default is the dangerous one:
+
+- **`INTERRUPT`** — "High priority. The agent immediately interrupts the current
+  interaction to announce the message."
+- **`APPEND`** — "Medium priority. The agent announces the message after the
+  current interaction ends."
+- **`IGNORE`** — "Low priority. If the agent is busy interacting, it ignores and
+  discards the broadcast; the message is only announced if the agent is not
+  interacting."
+
+Why this matters here: `hostSay()` sends `interruptable: false` and no
+`priority`, so all three lifeline lines take the `INTERRUPT` default and
+**guillotine whatever sentence the host was in the middle of**. `interruptable`
+protects the *incoming* line from the room; it does nothing for the line being
+destroyed. Announcements that must land in order want `APPEND`.
+
+512 bytes is not 512 characters. Devanagari spends three bytes per code point,
+so the real ceiling is roughly 170 characters — comfortably above the lifeline
+lines, but worth knowing before anything longer is sent this way.
+
+## `data_channel` defaults to `datastream`, and the client docs are RTM-only — 24 Aug 2026
+
+Source: `POST /v2/projects/{appid}/join`, same page as above; plus
+<https://docs.agora.io/en/ai/build/handle-runtime-events/get-runtime-events>
+and <https://docs.agora.io/en/ai/build/transcripts> (all fetched 24 Aug 2026).
+
+`properties.parameters.data_channel` takes two values:
+
+- `rtm` — "Use RTM transmission. This configuration takes effect only when
+  `advanced_features.enable_rtm` is `true`."
+- `datastream` — "Use RTC data stream transport." **This is the default.**
+
+So the two flags in `buildAgentProperties` are doing something easy to
+misread: setting `data_channel: "rtm"` routes agent events *away* from the RTC
+data stream and onto the RTM channel. With no RTM client logged in, that means
+transcripts, agent state and interrupt events are being published to a channel
+nobody is on. It is not that they fail — they arrive somewhere we are not.
+
+`datastream` looks like a shortcut to the same events over the RTC SDK we
+already ship, but **there is no documented client parsing story for it**: the
+"Client-side events" and "Display live transcripts" pages both instruct
+`data_channel: "rtm"` and require RTM enabled for the project, and the client
+toolkit only reads RTM. Treat `datastream` as UNVERIFIED — using it means
+parsing an undocumented payload.
+
+Also on the same pages: `parameters.enable_metrics` and
+`parameters.enable_error_message` "only take effect when
+`advanced_features.enable_rtm` is `true`".
+
+## What the client actually receives — 24 Aug 2026
+
+Source: <https://docs.agora.io/en/api-reference/api-ref/conversational-ai/client-toolkit/web>
+(fetched 24 Aug 2026).
+
+Transcript item (`ISubtitleHelperItem`):
+
+```ts
+{ uid: string; stream_id: number; turn_id: number;
+  _time: number; text: string; status: ETurnStatus; metadata: T | null }
+```
+
+`ETurnStatus`: `IN_PROGRESS` (0), `END` (1), `INTERRUPTED` (2). That third value
+is the one worth the whole integration — it is the authoritative answer to "was
+he cut off, and where", which `FINISHED_FRACTION` in `lib/subtitles.ts`
+currently guesses at with a coin-flip.
+
+Events: `TRANSCRIPT_UPDATED`, `AGENT_STATE_CHANGED` (`idle | listening |
+thinking | speaking | silent`, with `turnID` + `timestamp` + `reason`),
+`AGENT_SPEAKING_CHANGED`, `AGENT_INTERRUPTED` (`{ turnID, timestamp }`),
+`AGENT_METRICS`, `AGENT_ERROR`.
+
+Two traps in the same reference:
+
+- **`TRANSCRIPT_UPDATED` delivers the complete history every time.** Replace
+  state, never append, or every turn is duplicated.
+- **Word-level timing is not guaranteed.** `WORD` render mode needs
+  `AgoraRTC.setParameter('ENABLE_AUDIO_PTS_METADATA', true)` called *before*
+  `createClient()`, and setting it afterwards produces no error — the timing
+  data simply never arrives. The config carries an `enableRenderModeFallback`
+  flag (default `true`) precisely because "the server doesn't provide word-level
+  timing data" is an expected case.
+
+**UNVERIFIED, both to settle by experiment:** the literal string
+`ENABLE_AUDIO_PTS_METADATA` does not appear in our installed
+`agora-rtc-sdk-ng@4.24.7` bundle, though the `audio-pts` / `audioMetadata`
+plumbing does; and whether Sarvam Bulbul supplies word timings at all is
+unknown. `TEXT` mode needs no PTS and is enough to fix *what* is displayed —
+only the sub-second sync depends on this.
+
+## Filler words: wrong config key, and Agora has a playback queue — 24 Aug 2026
+
+Source: <https://docs.agora.io/en/ai/build/shape-the-conversation/filler-words>
+(fetched 24 Aug 2026).
+
+The documented key is **`trigger.fixed_time_config.response_wait_ms`**,
+confirmed identically in all four samples on the page (Python, TypeScript, Go,
+REST). `buildAgentProperties` sends `trigger.config.response_wait_ms`, so our
+1200ms is being **silently ignored** and fillers fire at the server default.
+Note the asymmetry that caused this: `content` really does take
+`static_config`, and `trigger` takes `fixed_time_config` — neither is plain
+`config`.
+
+Two behaviours stated on the same page:
+
+- **"When multiple filler words or LLM responses are waiting to be played, they
+  are played in the order they arrive."** Agora maintains its own outbound
+  playback queue. Anything on our side that tracks what the host is saying has
+  to observe that queue rather than assume one line at a time.
+- Filler words "inherit the interruption mode setting from the global
+  configuration in `turn_detection.config`".
+
+Consequence for the transcript work: filler phrases are chosen by Agora, so they
+are spoken without ever passing through our LLM proxy — which is why
+`rememberAgentUtterance` never sees them and filler echo is not filtered.
+
+## Webhooks: `112 turns finished` is doc-inconsistent — 24 Aug 2026
+
+Source: <https://docs.agora.io/en/ai/build/handle-runtime-events/webhooks> and
+<https://docs.agora.io/en/ai/build/handle-runtime-events/get-runtime-events>
+(both fetched 24 Aug 2026).
+
+The webhook event table lists `101` agent joined, `102` agent left, `103`
+dialogue history, `110` agent error, `111` agent metrics, `201`/`202` call
+state. The *other* page additionally lists **`112 turns finished`**, which does
+not appear in that table. **Treat `112` as UNVERIFIED** — do not build a
+per-turn server-side acknowledgement on it without confirming it fires.
+
+Also documented there: agent state changes and interrupt events are
+**client-path only** — webhooks cannot supply them. So a purely server-side ack
+route cannot drive a subtitle; it can only audit one after the fact. Webhooks
+need Console notification setup and a secret, signatures are HMAC-SHA1
+(`Agora-Signature`) and HMAC-SHA256 (`Agora-Signature-V2`) over the raw body,
+and Agora's own guidance is to make handling idempotent "because retries can
+happen".
