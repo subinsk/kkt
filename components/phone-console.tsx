@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
-import { SEAT_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
+import { SEAT_COLORS, WIRE_LABELS_EN, type WireColor } from "@/lib/game/state";
 import { StageCanvas } from "@/components/stage/stage-canvas";
 import {
   Mic,
@@ -168,14 +168,14 @@ function JoinForm({
             />
           </h1>
           <p className="mt-3 text-sm" style={{ color: "var(--cream-dim)" }}>
-            Paanch taar. Chhe minute. Aap contestant hain.
+            Five wires. Six minutes. You are a contestant.
           </p>
         </header>
 
         <form onSubmit={submit} className="space-y-5">
           <div>
             <label className="label-dim mb-2 block" htmlFor="name">
-              Aapka naam
+              Your name
             </label>
             <input
               id="name"
@@ -229,7 +229,7 @@ function JoinForm({
             >
               {phone.length > 0 && !phoneOk
                 ? `${digits.length}/10 digits`
-                : "Sirf Phone a Friend ke liye. Game khatam hote hi delete ho jaata hai — save nahi hota, kisi ko diya nahi jaata."}
+                : "Used only for Phone a Friend. Deleted the moment the game ends — never stored, never shared."}
             </p>
           </div>
 
@@ -244,14 +244,15 @@ function JoinForm({
             disabled={busy}
             className="btn btn-brass w-full py-4 text-base"
           >
-            {busy ? "Baith rahe hain…" : "Seat le lo"}
+            {busy ? "Taking your seat…" : "Take my seat"}
           </button>
 
           <p
             className="text-center text-xs"
             style={{ color: "var(--cream-faint)" }}
           >
-            Mic ki permission maangi jayegi. Deni padegi — game bolne se chalta hai.
+            Your browser will ask for mic permission. You have to allow it —
+            the whole game runs on talking.
           </p>
         </form>
       </div>
@@ -486,7 +487,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
           playerId: session.player.id,
         })) as unknown as { call?: { error?: string; status?: string } };
         if (next.call?.error) setLifelineNote(next.call.error);
-        else setLifelineNote("Phone laga rahe hain…");
+        else setLifelineNote("Placing the call…");
       } else if (requestedByMe) {
         await act({ type: "cancel_lifeline" });
       } else {
@@ -495,7 +496,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
       }
     } catch (err) {
       setLifelineNote(
-        err instanceof Error ? err.message : "Lifeline nahi chali.",
+        err instanceof Error ? err.message : "The lifeline did not go through.",
       );
     }
   }
@@ -555,10 +556,10 @@ function Console({ code, session }: { code: string; session: Joined }) {
                 textShadow: `0 0 50px ${won ? "#3dd68c" : "#e5484d"}`,
               }}
             >
-              {won ? "Defused" : "Phat gaya"}
+              {won ? "Defused" : "Detonated"}
             </p>
             <p className="mt-3 text-lg" style={{ color: "var(--cream-dim)" }}>
-              {won ? "Paanch mein se paanch!" : "Ghadi jeet gayi."}
+              {won ? "Five out of five!" : "The clock won."}
             </p>
           </div>
         </div>
@@ -683,8 +684,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
           <p className="label mb-2 flex items-center gap-1.5">
             <Lightbulb size={11} />
             {game?.activeWire
-              ? WIRE_LABELS_HI[game.activeWire as WireColor] + " taar"
-              : "Sawaal"}
+              ? WIRE_LABELS_EN[game.activeWire as WireColor] + " wire"
+              : "Question"}
           </p>
           <div className="panel-sunken min-h-24 p-4">
             <p className="text-lg leading-snug">
@@ -692,7 +693,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
                 <ActiveRiddle code={code} wire={game.activeWire as WireColor} />
               ) : (
                 <span style={{ color: "var(--cream-faint)" }}>
-                  Amitabh bhai se bolo kis taar se shuru karna hai.
+                  Tell the host which wire to start with.
                 </span>
               )}
             </p>
@@ -724,19 +725,19 @@ function Console({ code, session }: { code: string; session: Joined }) {
                       : live
                         ? "On air"
                         : solo
-                          ? "Mic band"
+                          ? "Mic off"
                           : "Peer talk"}
                 </span>
                 <span className="mt-1 block text-sm opacity-80">
                   {lifelineActive
-                    ? "Call chal rahi hai — phone kaan pe rakho"
+                    ? "Call in progress — hold the phone to your ear"
                     : roundOver
-                      ? "Round poora ho gaya"
+                      ? "Round complete"
                       : live
-                        ? "Amitabh bhai sun rahe hain"
+                        ? "The host is listening"
                         : solo
-                          ? "Host nahi sun raha — tap karke baat karo"
-                          : "Aap sab baat kar sakte ho — host nahi sun raha"}
+                          ? "The host cannot hear you — tap to speak"
+                          : "You can all talk — the host cannot hear you"}
                 </span>
               </span>
               <span
@@ -755,15 +756,15 @@ function Console({ code, session }: { code: string; session: Joined }) {
           >
             {lifelineActive
               ? solo
-                ? "Sun lo, phir jawab do"
-                : "Jo suna wo baad mein sabko batao"
+                ? "Listen, then answer"
+                : "Tell the others what you heard afterwards"
               : roundOver
-                ? "Screen dekho"
+                ? "Watch the screen"
                 : live
                   ? solo
-                    ? "Tap karke mic band karo — sochne ka time free hai"
-                    : "Tap karke wapas discussion mein jao"
-                  : "Jawab dene ke liye tap karo · sochna free hai"}
+                    ? "Tap to mute — thinking time is free"
+                    : "Tap to rejoin the discussion"
+                  : "Tap to answer · thinking is free"}
           </p>
         </section>
 
@@ -806,11 +807,11 @@ function Console({ code, session }: { code: string; session: Joined }) {
               {lifelineActive
                 ? "On call"
                 : lifelineSpent
-                  ? "Ho gaya"
+                  ? "Used"
                   : lifelineGranted
-                    ? "Call karo"
+                    ? "Call now"
                     : requestedByMe
-                      ? "Poocha hai"
+                      ? "Requested"
                       : "Lifeline"}
             </span>
             <span className="text-[0.65rem] leading-tight" style={{ color: "var(--cream-faint)" }}>
@@ -820,7 +821,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
                   ? "—"
                   : lifelineGranted
                     ? "−45s"
-                    : "Host se maango"}
+                    : "Ask the host"}
             </span>
           </button>
         </section>
@@ -840,8 +841,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
             <span className="flex items-center gap-2 text-sm">
               <PhoneCall size={15} className="animate-pulse" style={{ color: "var(--signal-amber)" }} />
               {game.lifeline.status === "connected"
-                ? "Call chal rahi hai — suno"
-                : "Ring ho raha hai…"}
+                ? "Call in progress — listen"
+                : "Ringing…"}
             </span>
             <span className="numerals text-lg" style={{ color: "var(--signal-amber)" }}>
               {Math.max(0, game.lifeline.limit - game.lifeline.waiting)}s
@@ -937,25 +938,25 @@ function Summary({
       />
 
       <div className="mx-auto max-w-md px-5 pb-10 pt-8">
-        <p className="label">Room {game.code} · Round khatam</p>
+        <p className="label">Room {game.code} · Round over</p>
 
         <h1
           className="display mt-2 flex items-center gap-3 text-6xl uppercase leading-none"
           style={{ color: won ? "var(--signal-green)" : "var(--signal-red)" }}
         >
           {won ? <Trophy size={44} /> : <Flame size={44} />}
-          {won ? "Defused" : "Phat gaya"}
+          {won ? "Defused" : "Detonated"}
         </h1>
 
         <p className="mt-3 text-lg" style={{ color: "var(--cream-dim)" }}>
           {won
-            ? `Shabaash ${playerName}! Paanch mein se paanch.`
-            : `Ghadi jeet gayi, ${playerName}. Agli baar.`}
+            ? `Well played, ${playerName}! Five out of five.`
+            : `The clock won, ${playerName}. Next time.`}
         </p>
 
         {/* The personal line — the reason this lives on a phone and not a wall. */}
         <section className="panel mt-6 p-5">
-          <p className="label mb-1 flex items-center gap-1.5"><Scissors size={11} />Aapne kaate</p>
+          <p className="label mb-1 flex items-center gap-1.5"><Scissors size={11} />You cut</p>
           <p
             className="display text-5xl leading-none"
             style={{ color: seatColor }}
@@ -963,12 +964,12 @@ function Summary({
             {cutByMe}
             <span className="text-2xl" style={{ color: "var(--cream-faint)" }}>
               {" "}
-              / {cutTotal} taar
+              / {cutTotal} wires
             </span>
           </p>
           {cutByMe === 0 && (
             <p className="mt-2 text-xs" style={{ color: "var(--cream-faint)" }}>
-              Koi baat nahi — team ka kaam team ne kiya.
+              No matter — the team's work was the team's.
             </p>
           )}
         </section>
@@ -976,21 +977,21 @@ function Summary({
         <section className="mt-3 grid grid-cols-2 gap-3">
           <Stat
             icon={<Clock size={11} />}
-            label={won ? "Bacha" : "Chala"}
+            label={won ? "Left" : "Elapsed"}
             value={formatClock(game.secondsLeft)}
           />
           <Stat icon={<Lightbulb size={11} />} label="Hints" value={String(game.hintsUsed)} />
-          <Stat icon={<XCircle size={11} />} label="Galat" value={String(game.wrongAnswers)} />
+          <Stat icon={<XCircle size={11} />} label="Wrong" value={String(game.wrongAnswers)} />
           <Stat
             icon={<PhoneCall size={11} />}
             label="Lifeline"
-            value={game.lifeline.used ? "Use hui" : "Bachi"}
+            value={game.lifeline.used ? "Used" : "Unused"}
           />
         </section>
 
         {!won && remaining.length > 0 && (
           <section className="panel mt-3 p-4">
-            <p className="label mb-2">Ye taar bache the</p>
+            <p className="label mb-2">These wires were left</p>
             <div className="flex flex-wrap gap-2">
               {remaining.map((w) => (
                 <span
@@ -998,7 +999,7 @@ function Summary({
                   className="border px-2.5 py-1 text-sm"
                   style={{ borderColor: WIRE_HEX[w.color as WireColor] }}
                 >
-                  {WIRE_LABELS_HI[w.color as WireColor]}
+                  {WIRE_LABELS_EN[w.color as WireColor]}
                 </span>
               ))}
             </div>
@@ -1023,7 +1024,7 @@ function Summary({
                     }}
                   >
                     {p.name}
-                    {p.id === playerId && <span className="label ml-2">aap</span>}
+                    {p.id === playerId && <span className="label ml-2">you</span>}
                   </span>
                   <span
                     className="numerals ml-auto text-xl"
@@ -1139,7 +1140,7 @@ function WirePip({
         className="label-dim"
         style={{ color: active ? hex : undefined, fontSize: "0.5rem" }}
       >
-        {cut ? "kat" : deferred ? "baad" : WIRE_LABELS_HI[color].slice(0, 4)}
+        {cut ? "cut" : deferred ? "later" : WIRE_LABELS_EN[color].slice(0, 4)}
       </span>
     </div>
   );

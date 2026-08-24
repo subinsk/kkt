@@ -10,13 +10,19 @@
 export const WIRE_COLORS = ["red", "blue", "yellow", "green", "white"] as const;
 export type WireColor = (typeof WIRE_COLORS)[number];
 
-/** Roman, for the phone UI and the projected chyron. Read, never spoken. */
-export const WIRE_LABELS_HI: Record<WireColor, string> = {
-  red: "laal",
-  blue: "neela",
-  yellow: "peela",
-  green: "hara",
-  white: "safed",
+/**
+ * For the phone UI and the projected chyron. Read, never spoken.
+ *
+ * English, because every screen in this project is: the host talks Hinglish,
+ * the interface does not. `WIRE_LABELS_DEV` below is the spoken map, and the two
+ * are deliberately separate — see the note on it.
+ */
+export const WIRE_LABELS_EN: Record<WireColor, string> = {
+  red: "red",
+  blue: "blue",
+  yellow: "yellow",
+  green: "green",
+  white: "white",
 };
 
 /**

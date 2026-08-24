@@ -8,7 +8,7 @@ import { StageCanvas } from "./stage/stage-canvas";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
-import { WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
+import { WIRE_LABELS_EN, type WireColor } from "@/lib/game/state";
 
 /**
  * The projector — spec §3.
@@ -537,10 +537,10 @@ export default function StageView({ code }: { code: string }) {
             </p>
             <p className="mt-2 text-2xl" style={{ color: "var(--cream-dim)" }}>
               {game.phase === "won"
-                ? `${formatClock(secondsLeft)} bacha · ${game.hintsUsed} hint${
+                ? `${formatClock(secondsLeft)} left · ${game.hintsUsed} hint${
                     game.hintsUsed === 1 ? "" : "s"
-                  } · lifeline ${game.lifeline.used ? "use hui" : "bachi"}`
-                : `${game.wires.filter((w) => w.status !== "cut").length} taar bache the`}
+                  } · lifeline ${game.lifeline.used ? "used" : "unused"}`
+                : `${game.wires.filter((w) => w.status !== "cut").length} wires left`}
             </p>
 
             {/* The exit, offered rather than taken. */}

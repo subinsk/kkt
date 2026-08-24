@@ -5,7 +5,7 @@ import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { StageCanvas } from "@/components/stage/stage-canvas";
 import { useAgora, type AgoraCredentials } from "@/lib/use-agora";
-import { WIRE_COLORS, WIRE_LABELS_HI, type WireColor } from "@/lib/game/state";
+import { WIRE_COLORS, WIRE_LABELS_EN, type WireColor } from "@/lib/game/state";
 
 /**
  * The host console — spec §11.
@@ -395,7 +395,7 @@ export default function HostConsole({ code }: { code: string }) {
                       }}
                     />
                     <span className="display w-16 shrink-0 text-lg uppercase">
-                      {WIRE_LABELS_HI[color]}
+                      {WIRE_LABELS_EN[color]}
                     </span>
                     <span
                       className="label-dim w-14 shrink-0"

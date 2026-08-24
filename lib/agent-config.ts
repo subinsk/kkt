@@ -39,7 +39,7 @@ export function openingLine(opts: {
   wire: WireColor;
   riddle: string;
 }): string {
-  // Spoken, so the Devanagari map — WIRE_LABELS_HI is the one for the screen.
+  // Spoken, so the Devanagari map — WIRE_LABELS_EN is the one for the screen.
   const wire = WIRE_LABELS_DEV[opts.wire];
   const solo = opts.players.length === 1;
 
