@@ -1,7 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
+// The speaking threshold is shared with the phone's capture ducking, so the two
+// can never disagree about whether the host is talking.
+import { AGENT_SPEAKING_LEVEL } from "@/lib/use-agora";
+// Long lines are cut into cards there rather than here, so the splitting can be
+// asserted by `npm run check` without a WebGL context.
+import {
+  advanceReveal,
+  charsPerSecondFor,
+  cueAt,
+  newReveal,
+  toCues,
+} from "@/lib/subtitles";
 
 /**
  * What Amitabh bhai is saying, as a speech bubble above his head.
@@ -11,72 +24,94 @@ import { Html } from "@react-three/drei";
  * that the voice in the room belongs to the figure on screen. The bubble ties
  * them together.
  *
- * It also carries the room when the ASR or the PA is fighting a noisy hall —
- * a spectator at the back who cannot make out the audio can still follow the
- * game.
+ * It also carries the room when the ASR or the PA is fighting a noisy hall — a
+ * spectator at the back who cannot make out the audio can still follow the game.
  *
- * Typed out rather than appearing whole, deliberately: the text arrives from the
- * LLM all at once, but the *speech* takes several seconds. A bubble that popped
- * fully formed would finish long before he stopped talking and read as a
- * subtitle running ahead of the audio. Typing paces it to roughly the speed of
- * speaking.
+ * # The sync problem this solves
+ *
+ * The text and the audio arrive from two different places at two different
+ * times. `host_said` is emitted by the LLM proxy the instant the model finishes
+ * a turn — *before* the reply is even handed to Agora, which then has to run it
+ * through Sarvam TTS and stream the result back into the channel. That is
+ * anywhere from a few hundred milliseconds to a couple of seconds of nothing.
+ *
+ * So the text is never the cue. The AUDIO is the cue: `levelRef` carries the
+ * host's live output level, read off the RTC track every 60ms, and this
+ * component does nothing at all until that level says he has actually opened his
+ * mouth. Same at the other end — the bubble finishes when the audio stops, not
+ * when a timer says it should.
+ *
+ * Between those two edges we still have to guess, because Agora gives us no
+ * word timings, only a level. The guess is deliberately biased slow (see
+ * `HOLD_FRACTION`): a subtitle that lags the voice slightly reads as a subtitle,
+ * and one that runs ahead reads as broken — and worse, spoils the riddle.
  *
  * Rendered with drei's `Html`, so it is real DOM projected into the 3D scene —
  * crisp at projector scale, where canvas text is not.
  */
 
-/** Rough Hindi/Hinglish speaking pace, in ms per character. */
-const MS_PER_CHAR = 42;
-
-/** How long the finished bubble lingers before fading. */
-const LINGER_MS = 2600;
-
 export function SpeechBubble({
   text,
+  levelRef,
   position = [0, 1.62, -1.5],
 }: {
   /** The latest thing the host said. Null hides the bubble. */
   text: string | null;
+  /** The host's live output level, 0..1. The cue for everything below. */
+  levelRef: React.RefObject<number>;
   position?: [number, number, number];
 }) {
+  const cues = useMemo(() => (text ? toCues(text) : []), [text]);
+  const charsPerSecond = useMemo(() => (text ? charsPerSecondFor(text) : 0), [text]);
+
   const [shown, setShown] = useState("");
   const [visible, setVisible] = useState(false);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [typing, setTyping] = useState(false);
 
-  useEffect(() => {
-    // Clear any run still in flight — a new line must replace the old one
-    // immediately, not queue behind it.
-    for (const t of timers.current) clearTimeout(t);
-    timers.current = [];
+  /**
+   * The pacing state, in a ref rather than in React state.
+   *
+   * It is touched every frame; the three values that actually reach the DOM are
+   * pushed out only when they change, which works out at roughly one render per
+   * character revealed — the same budget the old per-character timers used, with
+   * none of their drift.
+   */
+  const run = useRef({ text: null as string | null, reveal: newReveal() });
 
-    if (!text) {
-      setVisible(false);
-      return;
+  useFrame((_state, delta) => {
+    const r = run.current;
+    // A backgrounded tab hands back one enormous delta on return. Clamping it
+    // stops the whole line fast-forwarding in a single frame.
+    const dt = Math.min(delta, 0.1);
+
+    if (r.text !== text) {
+      r.text = text;
+      r.reveal = newReveal();
+      if (visible) setVisible(false);
+      if (shown) setShown("");
+      if (typing) setTyping(false);
     }
 
-    setShown("");
-    setVisible(true);
+    if (!text) return;
 
-    // One timeout per character rather than an interval, so the whole run can be
-    // cancelled cleanly the moment he says something new.
-    for (let i = 1; i <= text.length; i++) {
-      timers.current.push(
-        setTimeout(() => setShown(text.slice(0, i)), i * MS_PER_CHAR),
-      );
-    }
-    timers.current.push(
-      setTimeout(() => setVisible(false), text.length * MS_PER_CHAR + LINGER_MS),
-    );
+    const { visible: nowVisible, done } = advanceReveal(r.reveal, {
+      dt,
+      voiced: (levelRef.current ?? 0) > AGENT_SPEAKING_LEVEL,
+      cues,
+      total: text.length,
+      charsPerSecond,
+    });
 
-    return () => {
-      for (const t of timers.current) clearTimeout(t);
-      timers.current = [];
-    };
-  }, [text]);
+    // Nothing is drawn until he has actually been heard.
+    const wantVisible = r.reveal.started && nowVisible;
+    if (wantVisible !== visible) setVisible(wantVisible);
+
+    const { shown: nextShown } = cueAt(cues, Math.floor(r.reveal.cursor));
+    if (nextShown !== shown) setShown(nextShown);
+    if (!done !== typing) setTyping(!done);
+  });
 
   if (!visible || !text) return null;
-
-  const typing = shown.length < text.length;
 
   return (
     <Html
@@ -92,8 +127,11 @@ export function SpeechBubble({
     >
       <div
         style={{
-          maxWidth: "22rem",
-          minWidth: "8rem",
+          // Fixed box. The card count absorbs a long line, not the bubble size —
+          // a bubble that grows with the text covers the wire panel behind it.
+          width: "22rem",
+          minHeight: "3.4rem",
+          boxSizing: "border-box",
           padding: "0.7rem 0.95rem",
           background: "rgba(12, 10, 8, 0.92)",
           border: "1px solid rgba(201, 151, 63, 0.55)",
@@ -124,6 +162,9 @@ export function SpeechBubble({
             lineHeight: 1.35,
             color: "#f2ece2",
             fontWeight: 500,
+            // A single unbroken token — a URL, a mangled transcript — must wrap
+            // rather than push the card wider than the box it is drawn in.
+            overflowWrap: "anywhere",
           }}
         >
           {shown}

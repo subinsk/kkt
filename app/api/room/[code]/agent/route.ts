@@ -136,6 +136,12 @@ export async function POST(
         expireAt,
       );
 
+      const greeting = openingLine({
+        players: game.players.map((p) => p.name),
+        wire: opening.wire.color,
+        riddle: opening.riddle.speak,
+      });
+
       const result = await agoraFetch<{ agent_id: string; status: string }>(
         "/join",
         {
@@ -150,11 +156,7 @@ export async function POST(
               token: agentToken,
               agentUid: String(agentUid),
               systemPrompt: SYSTEM_PROMPT,
-              greeting: openingLine({
-                players: game.players.map((p) => p.name),
-                wire: opening.wire.color,
-                riddle: opening.riddle.speak,
-              }),
+              greeting,
             }),
           },
         },
@@ -162,6 +164,21 @@ export async function POST(
 
       agents.set(game.code, result.agent_id);
       emit(game, "agent_started", { agentId: result.agent_id, agentUid });
+
+      /**
+       * Put the opening on the screens too.
+       *
+       * The greeting is the one thing the host says that never passes through
+       * the LLM proxy — Agora TTSs `greeting_message` directly — so it is also
+       * the one thing `host_said` never fired for. The result was the longest
+       * line of the whole game, the one carrying the rules, playing with a blank
+       * speech bubble above his head.
+       *
+       * Emitting it here is safe *because* the bubble waits for audio: this
+       * fires the moment Agora accepts the join, seconds before he actually
+       * starts talking, and the screens sit on it until they hear him.
+       */
+      emit(game, "host_said", { text: greeting });
 
       return NextResponse.json({
         agentId: result.agent_id,

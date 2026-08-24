@@ -26,6 +26,21 @@ import type {
  * object, three deployment modes, the same code.
  */
 
+/**
+ * The output level above which the host counts as speaking, 0..1.
+ *
+ * One constant because two things key off it and they must never disagree: the
+ * phone ducks its own capture gain while he talks, and the projector's speech
+ * bubble uses the same edge to decide when to start and stop revealing his line.
+ * Split into two literals, they drift, and the symptom is a subtitle that starts
+ * before the voice — with nothing in any log to say why.
+ *
+ * `getVolumeLevel()` reads the received stream whether or not anything is
+ * playing it, so this works on the host console and the phones too, neither of
+ * which puts the host through a speaker.
+ */
+export const AGENT_SPEAKING_LEVEL = 0.06;
+
 export type AudioMode = "A" | "B" | "C";
 
 const POLICY: Record<AudioMode, { play: ("agent" | "players")[] }> = {

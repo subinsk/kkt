@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
-import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
+import {
+  useAgora,
+  configuredMode,
+  AGENT_SPEAKING_LEVEL,
+  type AgoraCredentials,
+} from "@/lib/use-agora";
 import { SEAT_COLORS, WIRE_LABELS_EN, type WireColor } from "@/lib/game/state";
 import { StageCanvas } from "@/components/stage/stage-canvas";
 import {
@@ -431,7 +436,7 @@ function Console({ code, session }: { code: string; session: Joined }) {
    * the leak we are fighting is acoustic and arrives with the audio.
    */
   useEffect(() => {
-    agora.duck(agora.agentLevel > 0.06);
+    agora.duck(agora.agentLevel > AGENT_SPEAKING_LEVEL);
   }, [agora.agentLevel, agora]);
 
   /** Tell the server we left, so the projector can dim an empty seat. */

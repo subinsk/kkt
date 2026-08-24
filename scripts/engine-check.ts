@@ -49,6 +49,16 @@ import {
   FILLER_PHRASE_MAX_CHARS,
   openingLine,
 } from "../lib/agent-config";
+import {
+  MAX_CUE_CHARS,
+  SPOKEN_WORDS_PER_SECOND,
+  advanceReveal,
+  charsPerSecondFor,
+  cueAt,
+  newReveal,
+  spokenDurationMs,
+  toCues,
+} from "../lib/subtitles";
 
 let passed = 0;
 let failed = 0;
@@ -249,14 +259,33 @@ const openingWords = openingLine({
 check(
   "the opening stays inside its clock budget",
   openingWords <= 80,
-  `${openingWords} words — roughly ${Math.round(openingWords / 2.3)}s of the 360s round`,
+  `${openingWords} words — roughly ${Math.round(
+    openingWords / SPOKEN_WORDS_PER_SECOND,
+  )}s of the 360s round`,
 );
+/**
+ * Nobody is greeted by name. The line is TTS'd verbatim, so a Roman-script name
+ * inside a Devanagari sentence is the one word Bulbul reads as English. The host
+ * uses names constantly from his first LLM turn onwards, where they are spelled
+ * in Devanagari.
+ */
 check(
-  "the opening line names a lone contestant",
-  openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(
+  "the opening line names nobody",
+  !openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(
     "Nikhil",
   ),
 );
+/**
+ * The rules are only ever spoken here. The system prompt tells the host he has
+ * already explained them, so if they fall out of this line the room never hears
+ * them and nothing anywhere errors.
+ */
+for (const rule of ["पाँच तार", "छह मिनट", "हिंट", "फ़ोन अ फ्रेंड"]) {
+  check(
+    `the opening explains the rules — ${rule}`,
+    openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(rule),
+  );
+}
 check(
   "a solo contestant is not told to press On Air",
   !openingLine({ players: ["Nikhil"], wire: "red", riddle: "R" }).includes(
@@ -481,6 +510,250 @@ check(
   "ordinary Hindi is left completely alone",
   sanitizeSpoken("नारियल? बिलकुल सही! लाल तार कट गया। अब कौन सा तार?") ===
     "नारियल? बिलकुल सही! लाल तार कट गया। अब कौन सा तार?",
+);
+
+/* -- subtitles ------------------------------------------------------------ */
+
+/**
+ * The speech bubble sits in front of the wire panel, which is the one thing on
+ * screen the audience actually has to read. So the guarantee being asserted here
+ * is a size guarantee, not a formatting nicety: no card ever exceeds the box it
+ * is drawn in, whatever the host emits. A model that ignores its "one or two
+ * sentences" instruction is not a hypothetical — it is a Tuesday.
+ */
+console.log("\nsubtitles");
+
+const opening = openingLine({
+  players: ["Rahul", "Priya"],
+  wire: "red",
+  riddle: riddleForWire("red").speak,
+});
+
+const SUBTITLE_CASES: { label: string; text: string }[] = [
+  { label: "the opening line", text: opening },
+  { label: "a normal two-sentence turn", text: "बिलकुल सही! लाल तार कट गया। अब कौन सा तार लेंगे?" },
+  { label: "a short interjection", text: "हाँ?" },
+  {
+    label: "a run-on with no sentence break",
+    text: "अरे वाह ".repeat(60),
+  },
+  {
+    label: "a wall of text with no whitespace at all",
+    text: "क".repeat(500),
+  },
+  { label: "a single character", text: "क" },
+];
+
+for (const { label, text } of SUBTITLE_CASES) {
+  const cues = toCues(text);
+
+  check(
+    `${label} — every card fits the bubble`,
+    cues.every((c) => c.text.length <= MAX_CUE_CHARS),
+    `longest card ${Math.max(...cues.map((c) => c.text.length))} chars`,
+  );
+
+  /**
+   * Offsets must climb. The reveal is paced by one cursor running over the whole
+   * line, so a card that starts before the previous one did would replay text
+   * already spoken — and a repeated offset means the splitter did not advance,
+   * which is a hang rather than a glitch.
+   */
+  check(
+    `${label} — card offsets advance`,
+    cues.every((c, i) => i === 0 || c.start > cues[i - 1].start),
+  );
+
+  /**
+   * Nothing may be dropped. Splitting on whitespace is allowed to lose the
+   * spaces themselves, so the comparison is against the text with whitespace
+   * removed — but every printing character the host said has to reach a card.
+   */
+  const strip = (v: string) => v.replace(/\s+/g, "");
+  check(
+    `${label} — no words are lost`,
+    strip(cues.map((c) => c.text).join("")) === strip(text),
+  );
+}
+
+/**
+ * Walking the cursor from nothing to the full length is exactly what the render
+ * loop does every frame, so it must never step outside a card. Before this, an
+ * off-by-one in the lookup showed as a card flashing empty at every boundary.
+ */
+const walk = toCues(opening);
+let everyStepValid = true;
+for (let cursor = 0; cursor <= opening.length; cursor++) {
+  const { text: card, shown } = cueAt(walk, cursor);
+  if (shown.length > card.length || !card.startsWith(shown)) everyStepValid = false;
+}
+check("the reveal cursor never steps outside its card", everyStepValid);
+
+check(
+  "the last cursor position lands on the last card, fully shown",
+  (() => {
+    const { text: card, shown } = cueAt(walk, opening.length);
+    return card === walk[walk.length - 1].text && shown === card;
+  })(),
+);
+
+/* -- subtitle sync -------------------------------------------------------- */
+
+/**
+ * The reveal, driven by a synthetic audio track.
+ *
+ * The two properties asserted here are the whole point of the component, and
+ * neither can be judged by reading the code: the subtitle must not start before
+ * the voice does, and it must not finish before the voice does. The second one
+ * is not cosmetic — the host'"'"'s line ENDS with the riddle, so a subtitle that
+ * runs ahead prints the question before he has asked it, and on a wrong-answer
+ * turn it prints the diagnostic hint early.
+ *
+ * The old implementation failed both. It started typing the moment the proxy
+ * emitted the text, which is before Agora has even called TTS, and it paced at a
+ * fixed 42ms per character, which finished the Devanagari opening in fourteen
+ * seconds against thirty-two seconds of speech.
+ */
+console.log("\nsubtitle sync");
+
+/**
+ * Run the machine frame by frame over a described audio track.
+ *
+ * `silentMs` is the gap between the text arriving and the host being heard —
+ * Agora'"'"'s TTS round trip. `speechMs` is how long he then talks for. Returns the
+ * frames at which the first and last characters appeared.
+ */
+function playLine(
+  text: string,
+  { silentMs, speechMs, gapEveryMs = 0 }: {
+    silentMs: number;
+    speechMs: number;
+    /** Insert a 200ms dip in the level this often, as real speech does. */
+    gapEveryMs?: number;
+  },
+) {
+  const cues = toCues(text);
+  const charsPerSecond = charsPerSecondFor(text);
+  const reveal = newReveal();
+  const FRAME_MS = 1000 / 60;
+
+  let firstShownAtMs = -1;
+  let fullyShownAtMs = -1;
+  let everVisibleWhileSilent = false;
+
+  // Run past the end of the speech so the ending is observed too.
+  const totalMs = silentMs + speechMs + 4000;
+
+  for (let t = 0; t < totalMs; t += FRAME_MS) {
+    const intoSpeech = t - silentMs;
+    const speaking = intoSpeech >= 0 && intoSpeech < speechMs;
+    // Real speech dips through the threshold between words.
+    const inGap =
+      gapEveryMs > 0 && speaking && intoSpeech % gapEveryMs > gapEveryMs - 200;
+    const voiced = speaking && !inGap;
+
+    const { visible } = advanceReveal(reveal, {
+      dt: FRAME_MS / 1000,
+      voiced,
+      cues,
+      total: text.length,
+      charsPerSecond,
+    });
+
+    const showing = reveal.started && visible && reveal.cursor >= 1;
+    if (showing && firstShownAtMs < 0) firstShownAtMs = t;
+    if (showing && intoSpeech < 0) everVisibleWhileSilent = true;
+    if (fullyShownAtMs < 0 && reveal.cursor >= text.length) fullyShownAtMs = t;
+  }
+
+  return {
+    firstShownAtMs,
+    fullyShownAtMs,
+    everVisibleWhileSilent,
+    cursor: reveal.cursor,
+  };
+}
+
+const line = openingLine({
+  players: ["Rahul", "Priya"],
+  wire: "red",
+  riddle: riddleForWire("red").speak,
+});
+const spokenMs = spokenDurationMs(line);
+
+/* The realistic case: 1.2s of TTS latency, then he speaks for the estimate. */
+const normal = playLine(line, { silentMs: 1200, speechMs: spokenMs, gapEveryMs: 1400 });
+
+check(
+  "nothing is shown during the TTS round trip",
+  !normal.everVisibleWhileSilent,
+);
+check(
+  "the first character lands within a beat of the voice starting",
+  normal.firstShownAtMs >= 1200 && normal.firstShownAtMs < 1200 + 400,
+  `shown at ${Math.round(normal.firstShownAtMs)}ms, voice at 1200ms`,
+);
+check(
+  "the line is not fully revealed before the voice stops",
+  normal.fullyShownAtMs >= 1200 + spokenMs * 0.9,
+  `full at ${Math.round(normal.fullyShownAtMs)}ms, voice ends at ${Math.round(
+    1200 + spokenMs,
+  )}ms`,
+);
+check(
+  "and it does finish, rather than stalling short",
+  normal.cursor >= line.length,
+  `cursor ${normal.cursor.toFixed(1)} of ${line.length}`,
+);
+
+/**
+ * Sarvam faster than the estimate. The catch-up has to close the gap rather than
+ * leave the last card half-drawn after he has stopped talking.
+ */
+const fast = playLine(line, { silentMs: 800, speechMs: spokenMs * 0.7, gapEveryMs: 1400 });
+check(
+  "a faster-than-estimated delivery still ends fully revealed",
+  fast.cursor >= line.length,
+  `cursor ${fast.cursor.toFixed(1)} of ${line.length}`,
+);
+
+/**
+ * Sarvam slower than the estimate. The hold has to stop the subtitle running out
+ * of text and printing the riddle early.
+ */
+const slow = playLine(line, { silentMs: 800, speechMs: spokenMs * 1.4, gapEveryMs: 1400 });
+check(
+  "a slower-than-estimated delivery never runs out of text early",
+  slow.fullyShownAtMs >= 800 + spokenMs * 1.2,
+  `full at ${Math.round(slow.fullyShownAtMs)}ms, voice ends at ${Math.round(
+    800 + spokenMs * 1.4,
+  )}ms`,
+);
+
+/**
+ * Barge-in. A contestant cuts him off two seconds in; the rest of the line is
+ * never spoken, so it must not be shown.
+ */
+const bargedIn = playLine(line, { silentMs: 600, speechMs: 2000 });
+check(
+  "a barge-in stops the subtitle instead of racing to the end",
+  bargedIn.cursor < line.length,
+  `cursor ${bargedIn.cursor.toFixed(1)} of ${line.length}`,
+);
+check(
+  "and it finishes the card he was actually on",
+  bargedIn.cursor === cueAt(toCues(line), Math.floor(bargedIn.cursor)).end,
+);
+
+/**
+ * A screen that never hears him at all — the host console plays nothing, and a
+ * projector can have autoplay blocked. Subtitles have to appear anyway.
+ */
+const deaf = playLine(line, { silentMs: 60000, speechMs: 0 });
+check(
+  "a screen with no audio still shows the line, on the estimate alone",
+  deaf.firstShownAtMs > 0,
+  `shown at ${Math.round(deaf.firstShownAtMs)}ms`,
 );
 
 /* -- loss path ------------------------------------------------------------ */

@@ -92,8 +92,11 @@ export function Scene({
       <Contestants game={game} />
 
       {/* Above and slightly in front of the host's head, wherever that is. */}
+      {/* Same level ref the head-bob reads: the bubble opens when he is
+          audibly speaking, not when his line arrives from the proxy. */}
       <SpeechBubble
         text={hostSaid}
+        levelRef={agentLevelRef}
         position={[HOST_POSITION[0], 1.78, HOST_POSITION[2] + 0.34]}
       />
 

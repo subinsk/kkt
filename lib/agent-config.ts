@@ -16,12 +16,13 @@ import { WIRE_LABELS_DEV, type WireColor } from "./game/state";
 export const AGENT_NAME = "amitabh-bhai";
 
 /**
- * The bare greeting, used only by `/api/agent/start` — the channel smoke test,
- * which has no room and therefore no wire to open on. Real rounds get
- * `openingLine()` instead.
- */
-/**
- * The first thing the room hears — and it opens on a question, not a preamble.
+ * The first thing the room hears — introduction, rules, then the first riddle.
+ *
+ * All three have to be in here, because this string is TTS'd verbatim off
+ * `llm.greeting_message` with no LLM turn behind it, and the system prompt then
+ * tells the host he has ALREADY introduced himself and explained the game. If
+ * the rules are not in this line they are never spoken at all — the host has
+ * been told he covered them, so he skips straight to judging answers.
  *
  * Devanagari throughout, because Sarvam Bulbul is an Indic voice: handed Roman
  * letters it pronounces them as English, so "Paanch taar, chhe minute" comes out
@@ -29,10 +30,8 @@ export const AGENT_NAME = "amitabh-bhai";
  * The riddles were always Devanagari, which is precisely why they sounded right
  * and every sentence around them did not.
  *
- * "On Air" stays in Latin on purpose: it is the label printed on the button they
- * have to press, and it is an English phrase, so reading it as English is
- * correct. A lone contestant is never told to press it, because they are put
- * live automatically and telling them otherwise would just confuse them.
+ * Kept inside a word budget that `check:engine` enforces — the countdown is
+ * running while this is spoken, so every word here is a word off the round.
  */
 export function openingLine(opts: {
   players: string[];
@@ -43,11 +42,32 @@ export function openingLine(opts: {
   const wire = WIRE_LABELS_DEV[opts.wire];
   const solo = opts.players.length === 1;
 
-  const welcome = solo
-    ? `नमस्कार ${opts.players[0]}! स्वागत है आपका — कौन काटेगा तारपती। पाँच तार, छह मिनट, और अकेले आप।`
-    : "नमस्कार! स्वागत है आप सबका — कौन काटेगा तारपती। पाँच तार, छह मिनट। जवाब देने के लिए अपने फ़ोन पर On Air दबाइए।";
+  /**
+   * Nobody is greeted by name here, deliberately.
+   *
+   * A contestant's name is Roman text sitting inside a Devanagari sentence, and
+   * this line goes to TTS untouched — so the one warm word in the greeting is
+   * the one word Bulbul reads with an English accent. The host addresses people
+   * by name constantly from his first real turn onwards, where the model spells
+   * them in Devanagari and they come out right.
+   */
+  const intro = "नमस्कार सभी को! मैं अमिताभ भाई, और ये है कौन काटेगा तारपती।";
 
-  return `${welcome} घड़ी शुरू। चलिए पहला सवाल — ${wire} तार। ${opts.riddle}`;
+  /** The rules, said out loud, before the clock is anybody's problem. */
+  const rules =
+    "नियम आसान हैं। सामने पाँच तार, हर तार पर एक पहेली। सही जवाब — तार कट गया। छह मिनट में पाँचों काटने हैं। ग़लत जवाब और हिंट, दोनों समय लेते हैं। फ़ोन अ फ्रेंड एक बार मिलेगा।";
+
+  /**
+   * "On Air" stays in Latin on purpose: it is the label printed on the button
+   * they have to press, and it is an English phrase, so reading it as English is
+   * correct. A lone contestant is put live automatically by `startGame`, so
+   * telling them to press anything would only confuse them.
+   */
+  const howToSpeak = solo
+    ? "आपका माइक चालू है — जब चाहें बोलिए।"
+    : "जवाब देने के लिए फ़ोन पर On Air दबाइए।";
+
+  return `${intro} ${rules} ${howToSpeak} घड़ी शुरू। पहला सवाल — ${wire} तार। ${opts.riddle}`;
 }
 
 /**
