@@ -217,7 +217,13 @@ body {
   );
 }
 
-/** Studio vignette — hot in the middle, falls off at the edges. */
+/**
+ * Studio vignette — hot in the middle, falls off at the edges.
+ *
+ * `--vignette-edge` is there for the landing hero, whose subject deliberately
+ * sits off-centre and would otherwise be standing in the darkest part of its
+ * own frame. Everywhere else the default is what you want.
+ */
 .vignette::before {
   content: "";
   position: absolute;
@@ -226,7 +232,7 @@ body {
   background: radial-gradient(
     ellipse 70% 60% at 50% 42%,
     transparent 0%,
-    rgb(0 0 0 / 0.45) 100%
+    rgb(0 0 0 / var(--vignette-edge, 0.45)) 100%
   );
 }
 

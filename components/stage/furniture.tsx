@@ -14,13 +14,72 @@ import * as THREE from "three";
  */
 
 export const TABLE = {
-  center: [0, 0, -0.35] as [number, number, number],
+  center: [0, 0, -0.23] as [number, number, number],
+  /** Underside of the top slab. Things rest at `TABLE_SURFACE`, not here. */
   height: 0.74,
-  outerX: 2.95,
-  outerZ: 2.15,
-  innerX: 1.62,
-  innerZ: 1.0,
+  outerX: 2.6,
+  outerZ: 1.53,
+  innerX: 1.9,
+  innerZ: 0.95,
 };
+
+/**
+ * The height things actually rest at.
+ *
+ * The top is extruded 0.06 upward from `height` and bevelled 0.012 proud of
+ * that, so `height` is the *underside* of the slab. Placing a mug at
+ * `TABLE.height` sinks it into the table — which is precisely the bug this
+ * constant exists to stop anyone reintroducing.
+ */
+export const TABLE_SURFACE = TABLE.height + 0.06 + 0.012;
+
+/**
+ * How far behind a seated body its chair sits, along the body's own local −Z.
+ *
+ * Derived, not eyeballed. The backrest's front face is at chair-local z = −0.13
+ * and a torso is 0.28 in radius, so the body's centre belongs about 0.15 ahead
+ * of the chair's origin — which puts its back against the backrest and its hips
+ * over the seat pan.
+ *
+ * The old value was 0.42, tuned while `facing` was inverted and the chair was
+ * hidden behind the occupant. Once the figures turned the right way round it
+ * became a chair parked a foot and a half behind whoever was meant to be in it.
+ */
+export const CHAIR_SET_BACK = 0.15;
+
+/**
+ * Where a person sits.
+ *
+ * Everyone at this table is placed by angle around it rather than by hand-tuned
+ * coordinates. `angleDeg` is measured from +X, so 90° is the near side facing
+ * the camera and 270° is the host's side. The point returned lies along the
+ * ellipse's outward normal, `clearance` metres clear of the edge — so a body
+ * placed here is beside the table, never inside the tabletop.
+ *
+ * This is the whole reason the figures and the furniture cannot drift apart:
+ * change the table's dimensions and every seat follows it.
+ */
+export function seatAt(
+  angleDeg: number,
+  clearance = 0.3,
+): [number, number, number] {
+  const t = (angleDeg * Math.PI) / 180;
+  const { outerX: a, outerZ: b } = TABLE;
+
+  const px = a * Math.cos(t);
+  const pz = b * Math.sin(t);
+
+  // Outward normal of x²/a² + z²/b² = 1 is proportional to (x/a², z/b²).
+  const nx = px / (a * a);
+  const nz = pz / (b * b);
+  const len = Math.hypot(nx, nz) || 1;
+
+  return [
+    TABLE.center[0] + px + (nx / len) * clearance,
+    0,
+    TABLE.center[2] + pz + (nz / len) * clearance,
+  ];
+}
 
 export function Table() {
   /**
@@ -92,8 +151,17 @@ export function Table() {
         <meshStandardMaterial color="#4a4038" roughness={0.6} metalness={0.15} />
       </mesh>
 
-      {/* Modesty panel dropping into the hole — gives the void depth. */}
-      <mesh position={[0, TABLE.height - 0.34, 0]}>
+      {/**
+       * Modesty panel dropping into the hole — gives the void depth.
+       *
+       * Squashed on Z, because the hole is an ellipse and a cylinder is not. A
+       * round panel sized to `innerX` splays a metre past the hole's short axis
+       * and shows up under the table from any low angle.
+       */}
+      <mesh
+        position={[0, TABLE.height - 0.34, 0]}
+        scale={[1, 1, TABLE.innerZ / TABLE.innerX]}
+      >
         <cylinderGeometry
           args={[TABLE.innerX * 0.96, TABLE.innerX * 0.96, 0.62, 40, 1, true]}
         />
@@ -104,8 +172,8 @@ export function Table() {
         />
       </mesh>
 
-      {/* Plinth base */}
-      <mesh position={[0, 0.05, 0]}>
+      {/* Plinth base, squashed to the same ellipse. */}
+      <mesh position={[0, 0.05, 0]} scale={[1, 1, TABLE.innerZ / TABLE.innerX]}>
         <cylinderGeometry args={[TABLE.innerX * 0.8, TABLE.innerX * 0.85, 0.1, 32]} />
         <meshStandardMaterial color="#28241f" roughness={0.8} />
       </mesh>
@@ -184,9 +252,17 @@ export function TaskChair({
  */
 export function DeskProps() {
   return (
-    <group>
+    /**
+     * Table-relative, and resting on `TABLE_SURFACE`.
+     *
+     * Both halves of that matter. World coordinates meant every prop had to be
+     * re-tuned by hand whenever the table moved, and `TABLE.height` is the
+     * slab's underside — so the previous version had the whole set dressing
+     * sunk into the tabletop with only the mug rims showing.
+     */
+    <group position={[TABLE.center[0], TABLE_SURFACE, TABLE.center[2]]}>
       {/* Laptop in front of the centre contestant, screen facing away from us. */}
-      <group position={[0.02, TABLE.height, 1.06]} rotation={[0, Math.PI, 0]}>
+      <group position={[0.02, 0, 1.22]} rotation={[0, Math.PI, 0]}>
         <mesh position={[0, 0.005, 0]} castShadow>
           <boxGeometry args={[0.34, 0.012, 0.24]} />
           <meshStandardMaterial color="#3a3d42" roughness={0.35} metalness={0.75} />
@@ -202,12 +278,12 @@ export function DeskProps() {
         </mesh>
       </group>
 
-      <Mug position={[-0.72, TABLE.height, 1.24]} />
-      <Mug position={[0.82, TABLE.height, 1.2]} />
-      <Mug position={[1.02, TABLE.height, 1.05]} />
+      <Mug position={[-0.72, 0, 1.3]} />
+      <Mug position={[0.86, 0, 1.26]} />
+      <Mug position={[1.3, 0, 1.05]} />
 
       {/* Water glass */}
-      <mesh position={[-0.95, TABLE.height + 0.055, 1.05]} castShadow>
+      <mesh position={[-1.02, 0.055, 1.1]} castShadow>
         <cylinderGeometry args={[0.038, 0.033, 0.11, 14]} />
         <meshStandardMaterial
           color="#dceaf2"
@@ -219,26 +295,17 @@ export function DeskProps() {
       </mesh>
 
       {/* Papers */}
-      <mesh
-        position={[-1.35, TABLE.height + 0.003, 0.92]}
-        rotation={[-Math.PI / 2, 0, 0.22]}
-      >
+      <mesh position={[-1.45, 0.003, 0.98]} rotation={[-Math.PI / 2, 0, 0.22]}>
         <planeGeometry args={[0.22, 0.3]} />
         <meshStandardMaterial color="#f3f1ec" roughness={0.95} />
       </mesh>
-      <mesh
-        position={[1.3, TABLE.height + 0.003, 0.86]}
-        rotation={[-Math.PI / 2, 0, -0.16]}
-      >
+      <mesh position={[1.42, 0.003, 0.94]} rotation={[-Math.PI / 2, 0, -0.16]}>
         <planeGeometry args={[0.22, 0.3]} />
         <meshStandardMaterial color="#f3f1ec" roughness={0.95} />
       </mesh>
 
       {/* Host's own notes, so his side of the table is not bare. */}
-      <mesh
-        position={[0.34, TABLE.height + 0.003, -1.42]}
-        rotation={[-Math.PI / 2, 0, 0.1]}
-      >
+      <mesh position={[0.34, 0.003, -1.2]} rotation={[-Math.PI / 2, 0, 0.1]}>
         <planeGeometry args={[0.2, 0.28]} />
         <meshStandardMaterial color="#f3f1ec" roughness={0.95} />
       </mesh>

@@ -135,6 +135,8 @@ export type GameEvent = {
 
 export type Game = {
   code: string;
+  /** When the room was opened. Drives expiry — see `ROOM_TTL_MS`. */
+  createdAt: number;
   phase: GamePhase;
   players: Player[];
   wires: Wire[];
@@ -179,6 +181,21 @@ export function lifelineLimit(status: LifelineState["status"]): number {
 }
 
 export const DEFAULT_DURATION_SECONDS = 360; // 6:00, spec §5
+
+/**
+ * How long a room lives before it is dropped, measured from when it was opened.
+ *
+ * Rooms are in-memory and codes are minted per show, so without this a process
+ * that stays up across a demo day accumulates every abandoned room anyone
+ * created — each holding its own event log and subscriber set.
+ *
+ * Evaluated on lookup, never on a timer. `secondsLeft()` derives the clock from
+ * timestamps for the reasons written above it, and the same argument applies
+ * here: a `setInterval` sweeper dies on hot reload and double-fires if two ever
+ * race. An expired room is one nobody has asked for yet, which is exactly when
+ * there is a lookup to hang the check off.
+ */
+export const ROOM_TTL_MS = 60 * 60 * 1000; // 1 hour
 export const PENALTY_WRONG = 20;
 export const PENALTY_HINT = 15;
 export const PENALTY_LIFELINE = 45;

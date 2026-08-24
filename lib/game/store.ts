@@ -13,6 +13,7 @@
 
 import {
   DEFAULT_DURATION_SECONDS,
+  ROOM_TTL_MS,
   PENALTY_HINT,
   PENALTY_LIFELINE,
   PENALTY_WRONG,
@@ -115,6 +116,7 @@ export function createGame(opts?: {
 
   const game: Game = {
     code,
+    createdAt: Date.now(),
     phase: "lobby",
     players: [],
     // Riddles are bound to colours, not to a sequence — that is what lets a
@@ -162,13 +164,44 @@ export function createGame(opts?: {
   return game;
 }
 
+/**
+ * Drop every room past its TTL, and tell anyone still listening.
+ *
+ * Hung off lookups rather than a timer, per the note on `ROOM_TTL_MS`. Every
+ * route in the app reaches a room through `getGame`, so sweeping here means the
+ * whole surface inherits expiry without fourteen route handlers each
+ * remembering to check.
+ *
+ * The `room_expired` event matters as much as the delete: an SSE client
+ * subscribed to a room that simply vanished from the Map would sit on an open
+ * stream forever, reconnecting into a 404 and showing a frozen clock. Emitting
+ * first gives `use-room` something to act on, and clearing the subscriber set
+ * afterwards is what stops the listener leaking along with the room.
+ */
+function sweepExpired(now = Date.now()): void {
+  for (const [code, game] of store.games) {
+    if (now - game.createdAt < ROOM_TTL_MS) continue;
+
+    emit(game, "room_expired", { code, ageMs: now - game.createdAt });
+    store.games.delete(code);
+    store.subscribers.delete(code);
+  }
+}
+
 export function getGame(code: string): Game | undefined {
+  sweepExpired();
   return store.games.get(code.toUpperCase());
 }
 
 /** For the host console, which lists rooms without knowing a code. */
 export function listGames(): Game[] {
+  sweepExpired();
   return [...store.games.values()].sort((a, b) => b.seq - a.seq);
+}
+
+/** Milliseconds until this room is dropped. Zero once it is due. */
+export function msUntilExpiry(game: Game, now = Date.now()): number {
+  return Math.max(0, game.createdAt + ROOM_TTL_MS - now);
 }
 
 export function requireGame(code: string): Game {

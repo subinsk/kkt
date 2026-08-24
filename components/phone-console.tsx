@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
@@ -155,10 +156,16 @@ function JoinForm({
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-5 py-10">
         <header className="mb-8">
           <p className="label">Room {code}</p>
-          <h1 className="display mt-2 text-5xl uppercase">
-            Kaun Katega
-            <br />
-            <span style={{ color: "var(--brass)" }}>Taarpati</span>
+          {/* First thing a contestant sees after the QR scan. */}
+          <h1 className="mt-3 w-full max-w-[15rem]">
+            <Image
+              src="/kkt-logo.png"
+              alt="Kaun Katega Taarpati"
+              width={1104}
+              height={678}
+              priority
+              className="h-auto w-full"
+            />
           </h1>
           <p className="mt-3 text-sm" style={{ color: "var(--cream-dim)" }}>
             Paanch taar. Chhe minute. Aap contestant hain.

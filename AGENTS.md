@@ -81,7 +81,10 @@ Do not guess and do not present a guess as documented.
   every turn and may never compute it. It will hallucinate the countdown.
 - **Answer checking is semantic, never string matching.**
 - Restarting `cloudflared` changes the tunnel URL, which silently breaks
-  `PUBLIC_BASE_URL` and every webhook. Re-check it before every rehearsal.
+  `PUBLIC_BASE_URL` and every webhook. `npm run dev` renews and verifies the
+  tunnel as part of starting the server; `npm run tunnel` does it alone. Never
+  paste a hostname into `.env.local` by hand — the verification is the point.
+  See the `tunnel` skill.
 - **Run `npm run check` before every rehearsal**, and open `/api/health`. Both
   exist to make the *silent* failures loud: a stale tunnel URL, a missing hint
   MP3 (Vobiz skips unreachable audio without erroring, so it becomes dead air on
@@ -89,3 +92,18 @@ Do not guess and do not present a guess as documented.
 - There is **no ticking timer** anywhere. The clock is derived from timestamps in
   `secondsLeft()`. Do not add a `setInterval` that decrements a counter — it
   drifts, dies on hot reload, and double-counts if two ever race.
+
+## Before you change one line
+
+A one-line change here routinely breaks something three files away without
+erroring. `.claude/skills/blast-radius/` lists the seams that fail *silently* —
+the `publicView()` wire format, the LLM tool contract, the SSE resume contract,
+audio filenames, Vobiz callback URLs, the Agora agent payload, env vars, and the
+game rules. Invoke the `blast-radius` skill before editing any of them.
+
+## Tooling
+
+Candidate Claude Code skills and hooks for this repo — including which of the
+non-negotiables above could be enforced by a hook instead of by memory — are
+triaged in [docs/CLAUDE-TOOLING.md](docs/CLAUDE-TOOLING.md), along with what is
+already installed.

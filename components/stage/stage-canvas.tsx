@@ -25,6 +25,7 @@ export function StageCanvas({
   /** Bump this to hand control back to the automatic camera. */
   resetToken = 0,
   hostSaid = null,
+  frameloop,
   className,
 }: {
   game: PublicGame;
@@ -32,6 +33,8 @@ export function StageCanvas({
   minimal?: boolean;
   interactive?: boolean;
   resetToken?: number;
+  /** "demand" renders one frame and stops — for honouring reduced motion. */
+  frameloop?: "always" | "demand";
   /** The host's latest line, for the speech bubble. */
   hostSaid?: string | null;
   className?: string;
@@ -64,6 +67,7 @@ export function StageCanvas({
       shadows={!minimal}
       gl={{ antialias: !minimal, powerPreference: "high-performance" }}
       camera={{ position: CAMERA_HOME, fov: 40 }}
+      frameloop={frameloop}
       className={className}
     >
       <Scene

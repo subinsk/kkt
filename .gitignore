@@ -25,3 +25,6 @@ public/audio/outcome/*
 # error — exactly the kind of silent failure that has to be committed away.
 !public/audio/outcome/win.mp3
 !public/audio/outcome/lose.mp3
+
+# cloudflared quick-tunnel log (scripts/tunnel.mjs)
+.tunnel*.log

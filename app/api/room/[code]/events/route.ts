@@ -89,6 +89,22 @@ export async function GET(
        */
       const ticker = setInterval(() => {
         if (!open) return;
+
+        /**
+         * Has the room expired out from under us?
+         *
+         * `getGame` is what runs the TTL sweep, so calling it here does double
+         * duty: it closes a stream whose room is gone, and it means an idle room
+         * with nothing but a projector attached still gets swept — otherwise the
+         * only thing keeping it alive would be that no one had made an HTTP
+         * request in an hour. The `room_expired` event has already reached this
+         * subscriber by now; the sweep emits before it deletes.
+         */
+        if (!getGame(game.code)) {
+          cleanup();
+          return;
+        }
+
         // Release a call that no webhook ever closed, before anything else.
         sweepLifeline(game);
         const ended = checkTimeout(game);

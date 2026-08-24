@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import QRCode from "qrcode";
 import { StageCanvas } from "./stage/stage-canvas";
 import { useRoom, formatClock } from "@/lib/use-room";
@@ -212,7 +213,7 @@ export default function StageView({ code }: { code: string }) {
       .then((d) => {
         if (d.error) setNote(String(d.error));
       })
-      .catch((err) => setNote(err instanceof Error ? err.message : "Host nahi aaya"));
+      .catch((err) => setNote(err instanceof Error ? err.message : "The host did not arrive"));
   }, [started, agora.joined, code]);
 
   /** Chyron copy, driven off the event feed. */
@@ -233,7 +234,7 @@ export default function StageView({ code }: { code: string }) {
           setCaption(
             `${String(event.payload.playerName ?? "Someone")}: "${String(
               event.payload.text ?? "",
-            )}" — nahi`,
+            )}" — wrong`,
           );
         }
         if (event.type === "wire_cut") {
@@ -334,10 +335,10 @@ export default function StageView({ code }: { code: string }) {
         {missing ? (
           <div>
             <p className="display text-4xl uppercase" style={{ color: "var(--signal-red)" }}>
-              Room {code} nahi hai
+              Room {code} not found
             </p>
             <p className="mt-3 text-sm" style={{ color: "var(--cream-dim)" }}>
-              Ye code kisi room ka nahi hai. Host naya room khole.
+              No room has that code. The host can open a new one.
             </p>
             <a href="/" className="btn btn-brass mt-6 inline-block px-6 py-3">
               Main menu
@@ -399,10 +400,17 @@ export default function StageView({ code }: { code: string }) {
       <div className="vignette scanlines pointer-events-none absolute inset-0" />
 
       {/* ------------------------------------------------------- title --- */}
-      <div className="pointer-events-none absolute left-8 top-7">
-        <p className="label">Kaun Katega</p>
-        <h1 className="display text-4xl uppercase leading-none">
-          Taar<span style={{ color: "var(--brass)" }}>pati</span>
+      {/* The wordmark, sized for a projector at the back of a room. */}
+      <div className="pointer-events-none absolute left-8 top-7 w-56">
+        <h1>
+          <Image
+            src="/kkt-logo.png"
+            alt="Kaun Katega Taarpati"
+            width={1104}
+            height={678}
+            priority
+            className="h-auto w-full"
+          />
         </h1>
       </div>
 
@@ -426,7 +434,7 @@ export default function StageView({ code }: { code: string }) {
             className={`lamp lamp-on ${connected ? "lamp-green" : "lamp-red"}`}
           />
           <span className="label-dim">
-            {game.wires.filter((w) => w.status === "cut").length} / 5 kate
+            {game.wires.filter((w) => w.status === "cut").length} / 5 cut
           </span>
         </div>
       </div>
@@ -465,7 +473,7 @@ export default function StageView({ code }: { code: string }) {
         <p className="label">Contestants</p>
         {game.players.length === 0 && (
           <p className="text-sm" style={{ color: "var(--cream-faint)" }}>
-            QR scan karke join karo
+            Scan the QR code to join
           </p>
         )}
         {game.players.map((p) => {
@@ -603,18 +611,18 @@ export default function StageView({ code }: { code: string }) {
                 className="mt-2 text-xs"
                 style={{ color: "var(--signal-red)" }}
               >
-                Ye localhost hai — phone se nahi khulega. Tunnel chalao aur
-                PUBLIC_BASE_URL set karo.
+                This is localhost — a phone cannot open it. Start the tunnel
+                and set PUBLIC_BASE_URL.
               </p>
             )}
 
             <p className="mt-4 text-lg" style={{ color: "var(--cream-dim)" }}>
-              Phone se scan karein — ek se chaar log. Phir shuru.
+              Scan with your phone — one to four players. Then we begin.
             </p>
             <p className="mt-1 text-sm" style={{ color: "var(--cream-faint)" }}>
               {game.players.length === 1
-                ? "Akele bhi chalega — aap seedha on air honge."
-                : "Jitne aaye hain, utne se shuru ho jaayega."}
+                ? "Playing alone works — you go straight on air."
+                : "We start with whoever has joined."}
             </p>
 
             <div className="mt-4 flex items-center justify-center gap-2">
@@ -630,10 +638,10 @@ export default function StageView({ code }: { code: string }) {
               className="btn btn-brass mt-6 w-full py-5 text-lg"
             >
               {starting
-                ? "Amitabh bhai aa rahe hain…"
+                ? "Bringing the host in…"
                 : game.players.length === 0
-                  ? "Kisi ka intezaar…"
-                  : "Game shuru karo"}
+                  ? "Waiting for players…"
+                  : "Start the game"}
             </button>
 
             {note && (

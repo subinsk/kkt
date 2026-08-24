@@ -12,6 +12,9 @@
 import {
   addPlayer,
   createGame,
+  getGame,
+  listGames,
+  msUntilExpiry,
   cutWire,
   deferWire,
   endGame,
@@ -21,6 +24,7 @@ import {
   beginLifeline,
   pauseClock,
   recordWrongAnswer,
+  resetGame,
   resumeClock,
   openRound,
   OPENING_WIRE,
@@ -30,6 +34,7 @@ import {
 } from "../lib/game/store";
 import {
   PENALTY_HINT,
+  ROOM_TTL_MS,
   PENALTY_LIFELINE,
   PENALTY_WRONG,
   WIRE_COLORS,
@@ -491,6 +496,51 @@ check(
 check(
   "events carry monotonic sequence numbers",
   lossGame.events.every((e, i, all) => i === 0 || e.seq > all[i - 1].seq),
+);
+
+/* -- room expiry ---------------------------------------------------------- */
+/**
+ * Rooms are in-memory and codes are minted per show, so a process left up across
+ * a demo day would otherwise hold every abandoned room anyone opened, each with
+ * its own event log and subscriber set.
+ *
+ * Silent in the way this project keeps producing: nothing errors, memory just
+ * climbs and stale codes keep resolving. So the rule is asserted here — including
+ * that expiry is *derived from a timestamp* rather than swept by a timer, which
+ * is precisely why backdating `createdAt` is enough to make a room due.
+ */
+console.log("\nroom expiry");
+const freshRoom = createGame({ code: "FRESH" });
+const staleRoom = createGame({ code: "STALE" });
+
+check(
+  "a new room is not due to expire",
+  msUntilExpiry(freshRoom) > 59 * 60 * 1000,
+);
+
+staleRoom.createdAt = Date.now() - ROOM_TTL_MS - 1;
+check("a room past its TTL has no time left", msUntilExpiry(staleRoom) === 0);
+check("looking it up drops it", getGame("STALE") === undefined);
+check(
+  "and it is gone from the room list",
+  !listGames().some((g) => g.code === "STALE"),
+);
+check("while a fresh room survives the sweep", getGame("FRESH") !== undefined);
+check(
+  "expiry is announced before the room disappears",
+  staleRoom.events.some((e) => e.type === "room_expired"),
+);
+
+/**
+ * Re-running a room has to renew it, or a host who resets at minute fifty-nine
+ * loses the room a minute into the second round.
+ */
+const reRun = createGame({ code: "RERUN" });
+reRun.createdAt = Date.now() - 50 * 60 * 1000;
+addPlayer(reRun, { name: "Asha" });
+check(
+  "resetting a room renews its hour",
+  msUntilExpiry(resetGame(reRun)) > 59 * 60 * 1000,
 );
 
 console.log(

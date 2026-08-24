@@ -1,31 +1,25 @@
 # Deploying
 
-## Live deployments
+## Live deployment
 
-| | URL | |
-|---|---|---|
-| **Render** | <https://kaun-katega-taarpati.onrender.com> | The one to demo. One long-lived Node process, so rooms and the SSE stream actually work. Free tier — spins down after ~15 min idle, so hit it once before showing anyone. |
-| **Vercel** | <https://kkt-omega.vercel.app/> | Serverless. The UI loads and the set renders, but for the reasons below a room does not survive between requests. Treat it as a shop window, not a playable build. |
+<https://kaun-katega-taarpati.onrender.com> — Render, one long-lived Node
+process, so rooms and the SSE stream actually work. Free tier, so it spins down
+after ~15 min idle and takes 30–60s to wake: hit it once before showing anyone.
 
-Neither is a fallback for the other: **the free tiers are not the constraint** — a
-long-lived process is. Render gives one; Vercel cannot.
+There is deliberately only one. A serverless copy was tried and removed — the
+next section is why it can never host a playable round.
 
-**These two do not talk to each other.** They are independent copies of the same
-app, each with its own memory and its own env. Nothing in the code points one at
-the other, and there is no state shared between them — a room started on Render
-does not exist on Vercel.
-
-The URL each one needs is *its own*, because the inbound traffic comes from
+The URL the app needs is *its own*, because the inbound traffic comes from
 elsewhere: Agora's cloud fetches `/api/llm` and Vobiz's cloud fetches the
 `answer_url` and the hint `.wav`. That is what `PUBLIC_BASE_URL` is for, and
-[`lib/env.ts`](../lib/env.ts) now derives it from the host, so there is nothing
-to paste in. See [Wiring the public URL](#wiring-the-public-url).
+[`lib/env.ts`](../lib/env.ts) derives it from the host, so there is nothing to
+paste in. See [Wiring the public URL](#wiring-the-public-url).
 
 ## The one thing to know first
 
 **This app cannot run a *game* on Vercel, Netlify, or Cloudflare Workers.**
-Not a preference — it is architecturally incompatible with serverless. The
-Vercel deploy above builds and serves pages; it is the stateful half that
+Not a preference — it is architecturally incompatible with serverless. Such a
+deploy builds and serves pages perfectly well; it is the stateful half that
 breaks:
 
 | What | Why serverless breaks it |
@@ -48,9 +42,13 @@ This is the recommendation, not a fallback.
 
 ```bash
 npm run dev
-npx cloudflared tunnel --url http://localhost:3000
-# put the printed https URL into PUBLIC_BASE_URL, then restart npm run dev
 ```
+
+That starts the dev server *and* renews the tunnel: it rewrites
+`PUBLIC_BASE_URL` in `.env.local`, waits for `/api/health` through the new
+hostname, and fetches every hint and stinger over the tunnel before telling you
+it is ready. `npm run tunnel` does the tunnel half alone, for when the server is
+already up. `npm run dev:bare` is `next dev` with no tunnel, for offline UI work.
 
 Why this beats deploying, on the day:
 
@@ -63,8 +61,10 @@ Why this beats deploying, on the day:
 
 The one catch: **restarting `cloudflared` changes the URL**, which silently
 breaks the LLM proxy and every Vobiz webhook. Nothing errors — the host just
-never speaks. Re-check `/api/health` after any tunnel restart; it now detects
-both localhost and the placeholder.
+never speaks. This is why the tunnel is welded to `npm run dev` rather than left
+as a step to remember. If you ever start one by hand, run `npm run tunnel`
+afterwards rather than pasting the hostname in — the verification is the point.
+`/api/health` also detects both localhost and the placeholder.
 
 ---
 
@@ -122,18 +122,18 @@ no Node runtime for `agora-token`.
 host has to run `render:audio` itself or ship with silent lifelines:
 
 - Render: already in `buildCommand` in [`render.yaml`](../render.yaml).
-- Vercel: `buildCommand` in [`vercel.json`](../vercel.json), added for exactly
-  this reason — the default `npm run build` skipped it and the deploy had 0/5
-  hints and 0/2 stingers.
+- Any other host: put `npm run render:audio` ahead of `npm run build` yourself.
+  A plain `npm run build` skips it, and the deploy comes up with 0/5 hints and
+  0/2 stingers — silent lifelines, no error.
 
 Either way **`SARVAM_API_KEY` must be set for the environment being built**, not
 just at runtime. Without it the build still succeeds — deliberately, since a game
 with no lifeline audio beats a game that failed to deploy — so the only signal is
 the clip count in `/api/health`. Check it after every deploy.
 
-One wrinkle worth knowing: on Vercel `public/` is served by the CDN and is *not*
-on the function's filesystem, so an `existsSync` check reports every clip as
-missing even when they are served fine. `/api/health` therefore falls back to an
+One wrinkle worth knowing: on a CDN-backed host `public/` is not on the serving
+process's filesystem, so an `existsSync` check reports every clip as missing even
+when they are served fine. `/api/health` therefore falls back to an
 HTTP `HEAD` when the disk says no.
 
 That probe deliberately asks the host that served the request, **not**
@@ -164,7 +164,7 @@ Three things are built from it, in [`lib/env.ts`](../lib/env.ts):
 |---|---|---|
 | 1 | `PUBLIC_BASE_URL` | You. The only option locally, and the override anywhere. |
 | 2 | `RENDER_EXTERNAL_URL` | Render, automatically. Full URL, scheme included. |
-| 3 | `VERCEL_PROJECT_PRODUCTION_URL` | Vercel, automatically. Hostname only, so `https://` is prepended. |
+| 3 | `VERCEL_PROJECT_PRODUCTION_URL` | Vercel, automatically. Hostname only, so `https://` is prepended. Kept only so the app stays portable — there is no Vercel deploy any more. |
 
 So, concretely, what to set where:
 
@@ -172,20 +172,20 @@ So, concretely, what to set where:
 |---|---|
 | Local (`npm run dev`) | `PUBLIC_BASE_URL` in `.env.local` — your cloudflared URL. Required; nothing can derive a tunnel. |
 | Render | **Nothing.** Derived. Add `PUBLIC_BASE_URL` only for a custom domain. |
-| Vercel | **Nothing**, provided *Settings → Environment Variables → Enable access to System Environment Variables* is ticked. Otherwise add `PUBLIC_BASE_URL=https://kkt-omega.vercel.app`. |
 
-Two notes on the Vercel side. `VERCEL_PROJECT_PRODUCTION_URL` is used rather than
-`VERCEL_URL` deliberately: `VERCEL_URL` is per-deployment and changes on every
-push, so a preview deploy would hand Agora a URL that is already stale. And if
-Deployment Protection is on, the Vercel deploy cannot work regardless of the URL
-— Agora and Vobiz arrive unauthenticated and get the auth wall.
+One note for any host that derives the URL: prefer a *stable production* domain
+variable over a per-deployment one. `VERCEL_URL`, for instance, changes on every
+push, so a preview deploy would hand Agora a URL that is already stale — which is
+why the fallback above reads `VERCEL_PROJECT_PRODUCTION_URL` instead. And any
+host with deployment-protection or an auth wall in front of it cannot work at
+all: Agora and Vobiz arrive unauthenticated.
 
 `/api/health` reports `publicBaseSource` and `servingHost`, so you can see which
 of the three won without guessing.
 
 ### The trap: a deployed service carrying a tunnel URL
 
-This has already happened here — both deploys were found carrying a developer's
+This has already happened here — a deploy was found carrying a developer's
 `*.trycloudflare.com` URL. It is the nastiest failure in the project because
 every check passes: the URL resolves, it looks legitimate, `/api/health` says
 `ready: true`.
@@ -197,7 +197,7 @@ not exist where it is looking. Nothing errors. The host just makes no sense.
 `/api/health` now warns when `PUBLIC_BASE_URL`'s host differs from the host that
 served the request. It is a warning and not blocking on purpose — a tunnel in
 front of localhost mismatches legitimately, and so does a custom domain — so read
-it in context. On a `*.onrender.com` or `*.vercel.app` request it means the env
+it in context. On a `*.onrender.com` request it means the env
 var is wrong: unset it and let the host supply the value.
 
 ---

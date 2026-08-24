@@ -12,10 +12,10 @@ expires.
 Built for Build with Agora, Track 4. Design spec: [kaun-katega-taarpati-spec.md](kaun-katega-taarpati-spec.md).
 Engineering rules: [AGENTS.md](AGENTS.md).
 
-**Live:** <https://kaun-katega-taarpati.onrender.com> (Render — the real one, one
-long-lived Node process) · <https://kkt-omega.vercel.app/> (Vercel — serverless,
-so the in-memory room and the SSE stream do not survive; see
-[docs/DEPLOY.md](docs/DEPLOY.md))
+**Live:** <https://kaun-katega-taarpati.onrender.com> — Render, one long-lived
+Node process. Serverless hosts cannot run a round at all: the room lives in
+memory and the SSE stream stays open for the whole six minutes
+([docs/DEPLOY.md](docs/DEPLOY.md))
 
 ---
 
@@ -152,7 +152,7 @@ seconds of dead air on a live call, with no error anywhere.
 | `SARVAM_API_KEY` | dashboard.sarvam.ai | No voice at all — one key covers ASR and TTS |
 | `LLM_API_KEY` | Groq (default) | The host cannot think |
 | `VOBIZ_AUTH_ID`, `VOBIZ_AUTH_TOKEN`, `VOBIZ_FROM_NUMBER` | console.vobiz.ai | Phone a Friend fails — and refunds, visibly |
-| `PUBLIC_BASE_URL` | your tunnel | Agora cannot reach `/api/llm`. Local only — on Render and Vercel it is derived from the host ([docs/DEPLOY.md](docs/DEPLOY.md#wiring-the-public-url)) |
+| `PUBLIC_BASE_URL` | your tunnel | Agora cannot reach `/api/llm`. Local only — on Render it is derived from the host ([docs/DEPLOY.md](docs/DEPLOY.md#wiring-the-public-url)) |
 
 **Agora does not host an LLM** — a provider key is mandatory, not optional. Groq
 is the default because this is a voice game show under a countdown, so

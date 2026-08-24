@@ -91,8 +91,11 @@ export function Scene({
       <Host game={game} levelRef={agentLevelRef} seatPositions={SEAT_POSITIONS} />
       <Contestants game={game} />
 
-      {/* Above and slightly in front of the host's head. */}
-      <SpeechBubble text={hostSaid} position={[0, 1.72, -1.42]} />
+      {/* Above and slightly in front of the host's head, wherever that is. */}
+      <SpeechBubble
+        text={hostSaid}
+        position={[HOST_POSITION[0], 1.78, HOST_POSITION[2] + 0.34]}
+      />
 
       {!minimal && (
         <>
@@ -113,8 +116,22 @@ export function Scene({
  * Over-the-shoulder, slightly high — the angle a room camera would actually be
  * mounted at, above and behind the near seats.
  */
-export const CAMERA_HOME: [number, number, number] = [0, 2.42, 4.35];
-const LOOK_AT = new THREE.Vector3(0, 1.32, -1.6);
+/**
+ * Far enough back to hold the near chairs.
+ *
+ * At 3.95 the bottom of frame cut through y≈1.29 at the front row's depth, and
+ * their chair backs top out at 1.14 — so the three contestants sat on nothing.
+ * Pulling back is what buys foreground, not raising the camera: lifting it
+ * pitches the frustum down and the near cutoff barely moves.
+ */
+export const CAMERA_HOME: [number, number, number] = [0, 2.38, 4.8];
+
+/**
+ * The host's head, which is what this shot is about. Keyed off `HOST_POSITION`
+ * rather than a literal, so moving him around the table re-aims the camera
+ * instead of leaving it staring at where he used to sit.
+ */
+const LOOK_AT = new THREE.Vector3(0, 1.26, HOST_POSITION[2] + 0.2);
 
 function CameraRig({
   game,
