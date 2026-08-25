@@ -15,6 +15,7 @@ import {
   newReveal,
   toCues,
 } from "@/lib/subtitles";
+import type { HostLine } from "@/lib/use-host-line";
 
 /**
  * What Amitabh bhai is saying, as a speech bubble above his head.
@@ -51,18 +52,56 @@ import {
  */
 
 export function SpeechBubble({
-  text,
+  line,
+  status = null,
+  wordsPerSecond = null,
   levelRef,
+  onDone,
   position = [0, 1.62, -1.5],
 }: {
-  /** The latest thing the host said. Null hides the bubble. */
-  text: string | null;
-  /** The host's live output level, 0..1. The cue for everything below. */
+  /**
+   * The line the host is saying. Null hides the bubble.
+   *
+   * Carries an id rather than being a bare string, and the id is what the change
+   * detector compares. Two reasons, both bugs that were visible on stage: a
+   * repeated line is character-for-character identical to the one before it — the
+   * prompt tells the host to re-ask a question from the start after an
+   * interruption — so a string comparison saw no change and never re-revealed
+   * it. And a queue cannot exist without identity: `lib/use-host-line.ts` needs
+   * to know which line this is in order to know when to hand over the next.
+   */
+  line: HostLine | null;
+  /**
+   * The ledger's status for this line, when somebody is reporting acks.
+   *
+   * This is the better cue and it replaces the level threshold when present.
+   * `speaking` means Agora's own transcript says TTS has started for this turn —
+   * a fact, where the level was an inference from a smoothed reading of the
+   * received stream, computed independently on every screen. Null means nobody
+   * is reporting and the level is all we have, which is the pre-ledger
+   * behaviour and still correct.
+   */
+  status?: string | null;
+  /** The measured speaking rate from the ledger, if there is one yet. */
+  wordsPerSecond?: number | null;
+  /** The host's live output level, 0..1. The fallback cue when there are no acks. */
   levelRef: React.RefObject<number>;
+  /**
+   * Called once, when this line has been revealed and has finished lingering.
+   *
+   * This is what advances the queue, and it has to come from here rather than
+   * from a timer upstream: the reveal ends when the *audio* stops, and the level
+   * ref is only read in this component's frame loop.
+   */
+  onDone?: () => void;
   position?: [number, number, number];
 }) {
+  const text = line?.text ?? null;
   const cues = useMemo(() => (text ? toCues(text) : []), [text]);
-  const charsPerSecond = useMemo(() => (text ? charsPerSecondFor(text) : 0), [text]);
+  const charsPerSecond = useMemo(
+    () => (text ? charsPerSecondFor(text, wordsPerSecond) : 0),
+    [text, wordsPerSecond],
+  );
 
   const [shown, setShown] = useState("");
   const [visible, setVisible] = useState(false);
@@ -76,7 +115,20 @@ export function SpeechBubble({
    * character revealed — the same budget the old per-character timers used, with
    * none of their drift.
    */
-  const run = useRef({ text: null as string | null, reveal: newReveal() });
+  const run = useRef({
+    /**
+     * The id of the line being revealed, NOT its text.
+     *
+     * This one field is the whole repeated-line fix. Comparing text meant that
+     * the host re-asking a question — which the prompt requires after an
+     * interruption — looked like no change at all, so the reveal never restarted
+     * and the second ask was spoken with an empty bubble above it.
+     */
+    id: null as number | null,
+    reveal: newReveal(),
+    /** Set once `onDone` has fired, so it fires exactly once per line. */
+    reported: false,
+  });
 
   useFrame((_state, delta) => {
     const r = run.current;
@@ -84,9 +136,10 @@ export function SpeechBubble({
     // stops the whole line fast-forwarding in a single frame.
     const dt = Math.min(delta, 0.1);
 
-    if (r.text !== text) {
-      r.text = text;
+    if (r.id !== (line?.id ?? null)) {
+      r.id = line?.id ?? null;
       r.reveal = newReveal();
+      r.reported = false;
       if (visible) setVisible(false);
       if (shown) setShown("");
       if (typing) setTyping(false);
@@ -94,9 +147,31 @@ export function SpeechBubble({
 
     if (!text) return;
 
+    /**
+     * Is he speaking right now? The audio decides — always.
+     *
+     * This was briefly gated on the ledger's `status` instead, and that was
+     * wrong in an instructive way. The acks are authoritative about *what* was
+     * said and *whether it was cut off*, but they are measured to arrive only at
+     * the END of a turn — there is no in-progress transcript and no agent-state
+     * event on this stack (25 Aug 2026, see docs/AGORA-NOTES.md). So gating on
+     * `status === "speaking"` meant the reveal could not start until the line had
+     * already finished being spoken.
+     *
+     * The output level, by contrast, is the audio: it is read off the very stream
+     * the room is hearing, sixty times a second. Nothing can be better
+     * synchronised than that, because it *is* the thing being synchronised to.
+     *
+     * So the division of labour is: the level says WHEN, the ledger says WHAT.
+     * `status` is still used — an `interrupted` line is handed down already
+     * truncated to what was actually spoken, so the reveal runs out of characters
+     * in the right place instead of guessing at it.
+     */
+    const voiced = (levelRef.current ?? 0) > AGENT_SPEAKING_LEVEL;
+
     const { visible: nowVisible, done } = advanceReveal(r.reveal, {
       dt,
-      voiced: (levelRef.current ?? 0) > AGENT_SPEAKING_LEVEL,
+      voiced,
       cues,
       total: text.length,
       charsPerSecond,
@@ -109,6 +184,19 @@ export function SpeechBubble({
     const { shown: nextShown } = cueAt(cues, Math.floor(r.reveal.cursor));
     if (nextShown !== shown) setShown(nextShown);
     if (!done !== typing) setTyping(!done);
+
+    /**
+     * Hand the queue back, once.
+     *
+     * The condition is "revealed, and finished lingering" — `nowVisible` going
+     * false after `started` is exactly the linger expiring in `advanceReveal`.
+     * Reported from inside the frame loop because that is where the audio is
+     * observed; upstream has no way to know the voice has stopped.
+     */
+    if (!r.reported && r.reveal.started && !nowVisible) {
+      r.reported = true;
+      onDone?.();
+    }
   });
 
   if (!visible || !text) return null;

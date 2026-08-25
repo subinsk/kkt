@@ -74,6 +74,12 @@ export type AgoraCredentials = {
   uid: number;
   token: string;
   agentUid: number;
+  /**
+   * Present only on seats that report acks — the projector and the host
+   * console. Absent on a handset, and `lib/rtm.ts` simply does nothing without
+   * it rather than treating it as an error.
+   */
+  rtmToken?: string;
 };
 
 export type UseAgoraOptions = {
@@ -168,6 +174,17 @@ export function useAgora(options: UseAgoraOptions) {
         // render of any page that uses this hook.
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
         AgoraRTC.setLogLevel(3);
+
+        /**
+         * Audio PTS metadata is deliberately NOT enabled.
+         *
+         * It exists for word-level subtitle timing, which needs
+         * `ENABLE_AUDIO_PTS_METADATA` set before this point plus a TTS vendor
+         * that emits `words[].start_ms`. Sarvam emits none — measured, three
+         * runs, 25 Aug 2026 — and requesting WORD mode additionally stopped the
+         * agent transcript arriving at all. See docs/AGORA-NOTES.md before
+         * trying it again.
+         */
 
         // `codec` is the VIDEO codec and is required even on an audio-only
         // client, where it is ignored. Audio is Opus regardless; there is no
@@ -401,6 +418,16 @@ export function useAgora(options: UseAgoraOptions) {
 
   return {
     joined,
+    /**
+     * The live RTC client.
+     *
+     * Exposed for one caller: the ConvoAI toolkit in `lib/rtm.ts` needs the
+     * *same* client instance that is already subscribed to the agent, because
+     * transcripts can arrive over the RTC data channel as well as over RTM.
+     * Creating a second client to hand it would put a second subscriber in the
+     * channel under a different uid.
+     */
+    clientRef,
     micReady,
     /** What the mic is actually doing, so the UI cannot claim otherwise. */
     muted: desiredMute,

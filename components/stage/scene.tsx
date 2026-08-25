@@ -11,6 +11,7 @@ import { WirePanel, PANEL_POSITION } from "./wire-panel";
 import { Room, ROOM } from "./room";
 import { Table, DeskProps } from "./furniture";
 import { Confetti, Fire } from "./effects";
+import type { HostLine } from "@/lib/use-host-line";
 import { SpeechBubble } from "./speech-bubble";
 
 /**
@@ -37,7 +38,10 @@ export function Scene({
   minimal,
   interactive = false,
   userDriving,
-  hostSaid = null,
+  hostLine = null,
+  lineStatus = null,
+  wordsPerSecond = null,
+  onLineDone,
 }: {
   game: PublicGame;
   agentLevelRef: React.RefObject<number>;
@@ -45,8 +49,14 @@ export function Scene({
   interactive?: boolean;
   /** Set true the moment the user grabs the camera. */
   userDriving?: React.RefObject<boolean>;
-  /** The host's most recent line, typed out above his head. */
-  hostSaid?: string | null;
+  /** The host's current line, typed out above his head. */
+  hostLine?: HostLine | null;
+  /** The ledger's status for that line, or null when nobody is reporting acks. */
+  lineStatus?: string | null;
+  /** Measured speaking rate, for pacing the reveal. */
+  wordsPerSecond?: number | null;
+  /** Fired when that line is finished, so the queue can hand over the next. */
+  onLineDone?: () => void;
 }) {
   return (
     <>
@@ -95,7 +105,10 @@ export function Scene({
       {/* Same level ref the head-bob reads: the bubble opens when he is
           audibly speaking, not when his line arrives from the proxy. */}
       <SpeechBubble
-        text={hostSaid}
+        line={hostLine}
+        status={lineStatus}
+        wordsPerSecond={wordsPerSecond}
+        onDone={onLineDone}
         levelRef={agentLevelRef}
         position={[HOST_POSITION[0], 1.78, HOST_POSITION[2] + 0.34]}
       />

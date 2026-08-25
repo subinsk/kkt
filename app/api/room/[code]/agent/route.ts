@@ -8,9 +8,11 @@ import {
   buildAgentProperties,
   interruptAgent,
   speak,
+  type SpeakPriority,
 } from "@/lib/agora-rest";
 import { AGENT_NAME, SYSTEM_PROMPT, openingLine } from "@/lib/agent-config";
 import { agentUidFor, emit, getGame, openRound } from "@/lib/game/store";
+import { registerUtterance } from "@/lib/game/utterances";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +85,8 @@ export async function POST(
       action?: "start" | "stop" | "interrupt" | "speak";
       text?: string;
       interruptable?: boolean;
+      priority?: SpeakPriority;
+      register?: boolean;
     };
     const action = body.action ?? "start";
     const existing = agents.get(game.code);
@@ -126,11 +130,30 @@ export async function POST(
 
       const agentUid = agentUidFor(game.code);
       const expireAt = Math.floor(Date.now() / 1000) + 3600;
-      const agentToken = RtcTokenBuilder.buildTokenWithUid(
+      /**
+       * The agent's token needs RTM privileges as well as RTC.
+       *
+       * This one line is why transcripts never arrived. The join docs say it
+       * plainly under `enable_rtm`: "make sure the token includes both RTC and
+       * RTM privileges. When an agent joins an RTM channel, it reuses the token
+       * specified in the `token` field." Built with `buildTokenWithUid`, that
+       * token carries RTC only — so the agent joined the channel, spoke, and was
+       * simply never able to join RTM to publish what it had said.
+       *
+       * Nothing errors anywhere in that story. `/join` returns 200, the host
+       * talks, the projector shows subtitles timed off the audio level, and the
+       * only symptom is the drift this whole ledger exists to remove. Verified
+       * by `npm run check:browser`, which is the only thing that could see it.
+       *
+       * `buildTokenWithRtm` is Agora's documented answer to "a token with both
+       * privileges" — see the FAQ the join page links to. The account is the
+       * agent's uid in string form, matching `agent_rtc_uid` below.
+       */
+      const agentToken = RtcTokenBuilder.buildTokenWithRtm(
         appId(),
         APP_CERTIFICATE(),
         game.code,
-        agentUid,
+        String(agentUid),
         RtcRole.PUBLISHER,
         expireAt,
         expireAt,
@@ -178,6 +201,7 @@ export async function POST(
        * fires the moment Agora accepts the join, seconds before he actually
        * starts talking, and the screens sit on it until they hear him.
        */
+      registerUtterance(game, "greeting", greeting);
       emit(game, "host_said", { text: greeting });
 
       return NextResponse.json({
@@ -228,9 +252,20 @@ export async function POST(
       if (!text) {
         return NextResponse.json({ error: "text is required" }, { status: 400 });
       }
-      // `interruptable: false` for the lines that must land — the closing beat
-      // after the outcome stinger, with a room that is cheering.
-      await speak(existing, text, { interruptable: body.interruptable ?? true });
+      /**
+       * `interruptable: false` for the lines that must land — the closing beat
+       * after the outcome stinger, with a room that is cheering.
+       *
+       * `priority` is threaded through rather than defaulted here, because the
+       * caller is the only one who knows whether this line is worth cutting
+       * across a sentence for. `speak()` defaults it to APPEND; nothing in the
+       * game currently asks for anything else.
+       */
+      await speak(existing, text, {
+        interruptable: body.interruptable ?? true,
+        priority: body.priority,
+      });
+      if (body.register !== false) registerUtterance(game, "scripted", text);
       emit(game, "agent_spoke", { text });
       return NextResponse.json({ spoken: true });
     }

@@ -1,16 +1,19 @@
 import { TOOL_DEFINITIONS, executeTool } from "@/lib/tools";
-import { callUpstream, type Message } from "@/lib/llm";
-import { liveStateBlock } from "@/lib/agent-config";
+import { callUpstream, checkSpokenClaims, type Message } from "@/lib/llm";
+import { PROXY_FALLBACK_LINE, liveStateBlock } from "@/lib/agent-config";
 import { answerKey, getRiddle, riddleForWire } from "@/lib/game/riddles";
 import {
   findWire,
   livePlayers,
   secondsLeft,
+  WIRE_LABELS_DEV,
   wiresBy,
+  wiresRemaining,
   type Game,
 } from "@/lib/game/state";
-import { emit, getGame } from "@/lib/game/store";
-import { isSelfEcho, rememberAgentUtterance } from "@/lib/game/attribution";
+import { emit, getGame, recordUserTurn } from "@/lib/game/store";
+import { registerUtterance } from "@/lib/game/utterances";
+import { rememberAgentUtterance } from "@/lib/game/attribution";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,6 +91,8 @@ function buildLiveState(game: Game): string {
     intact: wiresBy(game, "intact"),
     cut: wiresBy(game, "cut"),
     deferred: game.deferred,
+    remaining: wiresRemaining(game),
+    phase: game.phase,
     activeWire,
     activeRiddle: riddle?.speak ?? null,
     activeRiddleHints: riddle?.hints ?? [],
@@ -166,7 +171,30 @@ export async function POST(request: Request) {
          * coming back and discard it before it reaches the model (spec §2.4).
          */
         const lastUser = [...messages].reverse().find((m) => m.role === "user");
-        if (lastUser?.content && isSelfEcho(room, lastUser.content)) {
+        /**
+         * Subtract the echo, attribute what is left, and hand the model only the
+         * human half.
+         *
+         * The old code asked "is this an echo?" and threw the whole turn away if
+         * so — which is right for one speaker and an answer-eater for two. In
+         * Mode A the room speaker leaks into three open mics, so a contestant
+         * answering *during* the host's sentence produced one ASR turn
+         * containing both, the containment test matched, and the answer went in
+         * the bin with the echo. Silently, before the model saw it.
+         *
+         * `recordUserTurn` also does the thing nothing has ever done: it calls
+         * `attribute()`, so `contested` is finally real and the host can be told
+         * that two people spoke at once instead of guessing a name.
+         */
+        const turn = lastUser?.content
+          ? recordUserTurn(game, lastUser.content)
+          : null;
+        if (turn && turn.status === "final" && turn.text !== lastUser!.content) {
+          // Rewrite in place so the model is judging the contestant's words and
+          // not the host's own sentence quoted back at it.
+          lastUser!.content = turn.text;
+        }
+        if (turn && turn.status === "echo") {
           controller.enqueue(
             sse(chunk(id, model, { role: "assistant", content: "" })),
           );
@@ -247,11 +275,42 @@ export async function POST(request: Request) {
               try {
                 result = await executeTool(call.function.name, args, room);
               } catch (err) {
+                const reason =
+                  err instanceof Error ? err.message : "tool failed";
+                /**
+                 * A refused tool call used to leave no trace anywhere.
+                 *
+                 * That is the single biggest reason "the host said it cut the
+                 * wire but the wire is still there" kept coming down to
+                 * guesswork: the model's own claim was visible on stage, the
+                 * successful cut emitted `wire_cut`, but a `cut_wire` that
+                 * *threw* — wrong colour, wire not active, round already over —
+                 * produced nothing on the wire, nothing in the room history,
+                 * and nothing to read afterwards. Three separate debugging
+                 * sessions ended in a theory instead of a measurement.
+                 *
+                 * So it is an event now. It is rare by construction (a refusal
+                 * means the model asked for something the rules forbid), the
+                 * payload carries the arguments it asked for, and it shows up
+                 * in the host console's feed live.
+                 */
+                console.error(
+                  `[llm-proxy] tool refused — ${call.function.name}(${JSON.stringify(
+                    args,
+                  )}) → ${reason}`,
+                );
+                emit(game, "tool_refused", {
+                  tool: call.function.name,
+                  args,
+                  reason,
+                  activeWire: game.activeWire,
+                  phase: game.phase,
+                });
                 // Requirement #9: the host must behave sanely when an action
                 // fails, and say so rather than pretending it worked.
                 result = {
                   ok: false,
-                  error: err instanceof Error ? err.message : "tool failed",
+                  error: reason,
                   instruction:
                     "That did not go through. Say so plainly and in character, confirm nothing was charged if nothing was, and carry on with the game.",
                 };
@@ -270,7 +329,39 @@ export async function POST(request: Request) {
             continue;
           }
 
-          const text = reply.content ?? "";
+          let text = reply.content ?? "";
+
+          /**
+           * Refuse to speak a claim the server knows is false.
+           *
+           * Measured in a live round: the host announced "सफ़ेद तार कट गया। सभी
+           * पाँच तार कट गए — आप जीत गए" and never called `cut_wire`. The real cut
+           * landed a hundred and sixty seconds later, and in between he simply
+           * repeated that the team had won — because as far as he was concerned
+           * the job was done. The contestant had to keep insisting before the
+           * action he had already announced actually happened.
+           *
+           * LIVE STATE was correct throughout and said four wires were cut. The
+           * model asserted otherwise anyway, so being told the truth is not
+           * enough — the words have to be checked before they are spoken. This is
+           * `sanitizeSpoken`'s job applied to a different kind of impossible
+           * output: not machinery the audience should not hear, but a statement
+           * the screens will contradict in front of everybody.
+           */
+          const claim = checkSpokenClaims(text, {
+            cutDev: wiresBy(game, "cut").map((c) => WIRE_LABELS_DEV[c]),
+            remainingDev: wiresRemaining(game).map((c) => WIRE_LABELS_DEV[c]),
+            phase: game.phase,
+          });
+          if (!claim.ok) {
+            console.error(`[llm-proxy] refused a false claim — ${claim.reason}`);
+            emit(game, "false_claim_blocked", {
+              reason: claim.reason,
+              said: text.slice(0, 200),
+              spokenInstead: claim.correction,
+            });
+            text = claim.correction;
+          }
           // Remember what we are about to say, so we can recognise it if it
           // comes back through a phone mic.
           rememberAgentUtterance(room, text);
@@ -282,7 +373,19 @@ export async function POST(request: Request) {
            * chyron can be fed from. Fired before the SSE chunk goes out, so the
            * bubble starts typing as he starts speaking rather than after.
            */
-          if (text.trim()) emit(game, "host_said", { text: text.trim() });
+          /**
+           * Register it, then say it.
+           *
+           * `host_said` still goes out — the screens use it as a pre-echo so the
+           * projector is not blank during the TTS round trip, which is anywhere
+           * from a few hundred milliseconds to a couple of seconds. The
+           * registration is what the acks will land on, and what the watchdog
+           * will notice if he never says it at all.
+           */
+          if (text.trim()) {
+            registerUtterance(game, "turn", text.trim());
+            emit(game, "host_said", { text: text.trim() });
+          }
           controller.enqueue(
             sse(chunk(id, model, { role: "assistant", content: text })),
           );
@@ -291,14 +394,27 @@ export async function POST(request: Request) {
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown proxy error";
         console.error("[llm-proxy]", message);
+        /**
+         * Say it, remember it, and put it on the screens — in that order, and
+         * all three.
+         *
+         * Before this, the fallback was a bare literal that went to TTS and
+         * nowhere else. So the one moment the host is admitting a problem was
+         * also the moment the projector showed the *previous* line, and the
+         * phones fed it back through their mics as though a contestant had said
+         * it. Two divergences from one missing pair of calls.
+         *
+         * `game` may be null here — that is one of the ways we get into this
+         * catch — so the emit is conditional while the spoken line is not.
+         */
         controller.enqueue(
-          sse(
-            chunk(id, model, {
-              role: "assistant",
-              content: "Ek minute... thodi technical dikkat hai. Phir se boliye?",
-            }),
-          ),
+          sse(chunk(id, model, { role: "assistant", content: PROXY_FALLBACK_LINE })),
         );
+        if (game) {
+          rememberAgentUtterance(room, PROXY_FALLBACK_LINE);
+          registerUtterance(game, "failure", PROXY_FALLBACK_LINE);
+          emit(game, "host_said", { text: PROXY_FALLBACK_LINE });
+        }
       }
 
       controller.enqueue(

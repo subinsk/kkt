@@ -262,6 +262,20 @@ Three multi-speaker bugs this addresses:
 data, because nothing has ever called the function they live in. Treat all three
 as unvalidated and tune them in the room, like the barge-in thresholds.
 
+**Superseded, 25 Aug 2026 — the floor is now exclusive.** Going live unpublishes
+every other handset (`setPeerMode`), so there is only ever one possible speaker
+and attribution is a certainty (`source: "live"`, confidence 1) rather than a
+measurement. The level argmax, `contested`, and the three constants above are all
+still present and still asserted, but are now reachable only by calling
+`attribute()` directly — they are the fallback if the exclusive rule is relaxed,
+not the mechanism.
+
+The cost was accepted deliberately: two contestants can no longer talk over each
+other, so the host never arbitrates a split floor. That beat is gone in exchange
+for never naming the wrong person. Enforcement is in two halves, and both are
+required — the server rule, and the handset following the server's view of
+whether it is on air, because the publish decision lives on the phone.
+
 ### 4. Peer Talk
 
 `muted → requesting → live` (and back), plus `failed`. Two bugs close: `act()`
@@ -367,8 +381,16 @@ This is where sync actually gets fixed, and where the Console/Signaling
 prerequisite lands.
 
 **Step 3 — the human side.** `UserTurn`, the `attribute()` call that brings
-attribution to life, the echo-span subtraction, real `contested`. Depends on
-step 2's transport but on nothing else.
+attribution to life, the echo-span subtraction, real `contested`.
+
+**Correction, made while building it:** this does *not* depend on step 2's
+transport, and assuming it did was wrong. A finished user transcript already
+arrives server-side on every request to the LLM proxy, so the window
+`attribute()` needs can be derived there (`speechWindow`) with no Signaling
+dependency at all. Attribution therefore went live independently of RTM. If the
+RTM user-turn stream later proves reliable it can supply a measured window in
+place of the derived one, which is an accuracy improvement rather than an
+enabler.
 
 Each step carries its own slice of the test list below.
 

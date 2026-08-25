@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isSet, optional, resolvePublicBase } from "@/lib/env";
 import { RIDDLES } from "@/lib/game/riddles";
+import { checkNumbers } from "@/lib/vobiz";
 import { listGames } from "@/lib/game/store";
+import { isDegraded } from "@/lib/game/state";
+import { divergences } from "@/lib/game/utterances";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -166,6 +169,24 @@ export async function GET(request: NextRequest) {
       "Vobiz is not fully configured — Phone a Friend will fail (and refund, visibly).",
     );
   }
+
+  /**
+   * The shape of the two phone numbers.
+   *
+   * `from` wants E.164 *without* the plus and `to` wants it *with* — an asymmetry
+   * that reads as arbitrary and produces, when guessed wrong, the host saying
+   * "the call could not be placed" with nothing to indicate which field was at
+   * fault. Shape is all that can be checked from here — nobody can tell whether a
+   * number is *owned* without dialling it — but a missing country code or a
+   * truncated paste is detectable and otherwise silent until a live call.
+   */
+  const numbers = checkNumbers();
+  if (!numbers.from.ok) {
+    warnings.push(`VOBIZ_FROM_NUMBER looks wrong: ${numbers.from.note}`);
+  }
+  if (numbers.fallback && !numbers.fallback.ok) {
+    warnings.push(`FALLBACK_FRIEND_NUMBER looks wrong: ${numbers.fallback.note}`);
+  }
   const missingHints = hintAudio.filter((h) => !h.present);
   if (missingHints.length) {
     warnings.push(
@@ -179,6 +200,53 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  /**
+   * Speech divergence, per live room.
+   *
+   * The whole point of the utterance ledger is that the two halves of a spoken
+   * line can be compared, so this is where the comparison becomes visible. Each
+   * number names a different failure:
+   *
+   *   - `abandoned`    — we asked for a line, retried it once, and the room never
+   *                      acknowledged hearing it either time.
+   *   - `unattributed`  — the host said something no part of our system chose.
+   *   - `lateAcks`      — an acknowledgement arrived after the watchdog had given
+   *                      up. Usually means a deadline is tuned too tight.
+   *   - `pending`       — waiting right now. A number that sits here rather than
+   *                      passing through is the signature of a broken ack path.
+   *
+   * `degraded` is the one to read first: true means nothing is reporting acks at
+   * all, so every other number is meaningless and the screens are back on the
+   * estimate.
+   */
+  const rooms = listGames().map((game) => ({
+    code: game.code,
+    phase: game.phase,
+    degraded: isDegraded(game.utterances),
+    reporterError: game.utterances.reporterError,
+    speech: divergences(game),
+  }));
+  for (const r of rooms.filter((x) => x.reporterError)) {
+    warnings.push(
+      `Room ${r.code}: the transcript reporter could not start — ${r.reporterError}. Subtitles fall back to timing off the audio level, so the round still works, but the host and the screen can drift.`,
+    );
+  }
+  const noisy = rooms.filter(
+    (r) => r.speech.abandoned > 0 || r.speech.unattributed > 0,
+  );
+  if (noisy.length) {
+    warnings.push(
+      `Speech divergence in ${noisy.map((r) => r.code).join(", ")}: ` +
+        noisy
+          .map(
+            (r) =>
+              `${r.code} had ${r.speech.abandoned} line(s) the room never heard and ${r.speech.unattributed} the host said unprompted`,
+          )
+          .join("; ") +
+        ". The subtitle and the speaker disagreed this round.",
+    );
+  }
+
   return NextResponse.json({
     ready: blocking.length === 0,
     blocking,
@@ -189,11 +257,13 @@ export async function GET(request: NextRequest) {
       model: optional("LLM_MODEL", "openai/gpt-oss-120b"),
       upstream: optional("LLM_UPSTREAM_URL", "(default: Groq)"),
     },
+    vobiz: numbers,
     voice: {
       tts_speaker: optional("SARVAM_TTS_SPEAKER", "abhilash"),
       tts_language: optional("SARVAM_TTS_LANGUAGE", "hi-IN"),
       asr_language: optional("SARVAM_ASR_LANGUAGE", "unknown"),
     },
+    rooms,
     publicBaseUrl: publicBase || null,
     // Which variable won. The most useful line in this payload when the
     // host speaks locally but not deployed, or vice versa.

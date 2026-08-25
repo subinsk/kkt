@@ -348,7 +348,24 @@ export function advanceReveal(
   };
 }
 
-/** Characters per second for one line, from its estimated spoken duration. */
-export function charsPerSecondFor(text: string): number {
-  return (text.length / spokenDurationMs(text)) * 1000;
+/**
+ * Characters per second for one line.
+ *
+ * `wordsPerSecond` is the *measured* rate when the ledger has one, and this is
+ * the single most effective thing available for closing the gap between the
+ * subtitle and the voice. `SPOKEN_WORDS_PER_SECOND` is a guess that applies for
+ * the whole length of a line, so on a forty-second greeting a rate 30% out puts
+ * the text twelve seconds away from the audio — which reads as the subtitle
+ * showing something else entirely rather than as a slight lag.
+ *
+ * Sarvam sends no word timings, so the interior of a line cannot be made exact
+ * (see docs/AGORA-NOTES.md). Measuring the rate removes the systematic error and
+ * leaves only the variation within a sentence.
+ */
+export function charsPerSecondFor(text: string, wordsPerSecond?: number | null): number {
+  const rate =
+    wordsPerSecond && wordsPerSecond > 0 ? wordsPerSecond : SPOKEN_WORDS_PER_SECOND;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const ms = (Math.max(1, words) / rate) * 1000;
+  return (text.length / ms) * 1000;
 }

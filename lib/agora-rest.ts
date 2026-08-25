@@ -1,5 +1,5 @@
 import { appId as agoraAppId, optional, publicBaseUrl, required } from "./env";
-import { FILLER_PHRASES } from "./agent-config";
+import { AGORA_FAILURE_LINE, FILLER_PHRASES } from "./agent-config";
 
 /**
  * Thin wrapper over the Conversational AI Engine REST API.
@@ -77,23 +77,97 @@ export async function agoraFetch<T>(
  * Make the host say an exact line, without a round trip through the LLM.
  *
  * Used for the moments that must not be improvised: the lifeline announcement,
- * and the closing line after the outcome stinger has finished playing. Setting
- * `interruptable: false` stops a cheering room from cutting the host off
- * mid-sentence during the payoff beat.
+ * and the closing line after the outcome stinger has finished playing.
+ *
+ * The two options do opposite jobs and it is easy to reach for the wrong one:
+ *
+ *   - `interruptable: false` protects the line we are ABOUT to say from the room
+ *     — a cheering hall cannot cut the host off during the payoff beat.
+ *   - `priority` decides what happens to the line already in progress.
+ *
+ * Agora's own default for `priority` is `INTERRUPT`, documented as "immediately
+ * interrupts the current interaction". **We default to `APPEND` instead**, and
+ * the reason is a bug this caused: every lifeline announcement guillotined
+ * whatever sentence the host was in the middle of, so the room heard half a
+ * riddle and the screen showed the announcement. `interruptable: false` did not
+ * help, because it protects the incoming line and says nothing about the one
+ * being destroyed.
+ *
+ * A caller that genuinely wants to cut in must now say so. Nothing currently
+ * does — the pre-stinger cut goes through `interruptAgent` instead, which is
+ * clearer about what it is doing.
  */
 export async function speak(
   agentId: string,
   text: string,
-  opts?: { interruptable?: boolean; priority?: "INTERRUPT" | "APPEND" | "IGNORE" },
+  opts?: { interruptable?: boolean; priority?: SpeakPriority },
 ) {
   return agoraFetch(`/agents/${agentId}/speak`, {
     method: "POST",
     body: {
       text,
-      priority: opts?.priority ?? "INTERRUPT",
+      priority: opts?.priority ?? "APPEND",
       interruptable: opts?.interruptable ?? true,
     },
   });
+}
+
+/**
+ * Agora's three broadcast priorities, with the documented meaning of each:
+ *
+ *   INTERRUPT — "immediately interrupts the current interaction"
+ *   APPEND    — "announces the message after the current interaction ends"
+ *   IGNORE    — discarded entirely if the agent is busy
+ */
+export type SpeakPriority = "INTERRUPT" | "APPEND" | "IGNORE";
+
+/**
+ * `/speak` caps `text` at 512 **bytes**, not characters.
+ *
+ * Worth stating as a constant because the unit is the trap: Devanagari spends
+ * three bytes per code point, so the real ceiling is roughly 170 characters and
+ * a line that reads short on screen can be well over it. `npm run check`
+ * measures every verbatim line against this.
+ */
+export const SPEAK_TEXT_MAX_BYTES = 512;
+
+/**
+ * Covers the dead air while a tool resolves (spec §8). In this game the latency
+ * reads as suspense rather than lag, which is a free pass on the thing that
+ * usually damages voice demos — so lean into it.
+ *
+ * Its own function, and exported, purely so `npm run check` can read the key
+ * names back. The nesting is asymmetric in a way that has already bitten once:
+ *
+ *   trigger  → `fixed_time_config`
+ *   content  → `static_config`
+ *
+ * Neither is plain `config`. `content` was correct because Agora rejects the
+ * wrong key there with a 400 naming the exact path — so the mistake announced
+ * itself. `trigger` does not: the request is accepted, the threshold is
+ * discarded, and fillers fire on whatever the server default is. Nothing errors
+ * and nothing logs, which is why the assertion exists rather than a comment.
+ *
+ * Verified against all four samples on the filler-words page, 24 Aug 2026. See
+ * docs/AGORA-NOTES.md.
+ */
+export function fillerWordsConfig() {
+  return {
+    enable: true,
+    trigger: {
+      mode: "fixed_time",
+      fixed_time_config: { response_wait_ms: 1200 },
+    },
+    content: {
+      mode: "static",
+      static_config: {
+        // Devanagari, for the same reason as everything else spoken: Bulbul
+        // reads Roman script as English. Length-capped — see FILLER_PHRASES.
+        phrases: FILLER_PHRASES,
+        selection_rule: "shuffle",
+      },
+    },
+  };
 }
 
 /**
@@ -137,6 +211,20 @@ export function buildAgentProperties(opts: {
     // A string, not an int — an int is rejected at the API boundary.
     agent_rtc_uid: opts.agentUid,
     /**
+     * The identity the agent uses on the RTM channel.
+     *
+     * Transcripts are published *by the agent* over RTM, so it needs an RTM
+     * identity, and that identity has to be the one its token authorises. The
+     * token is minted by `buildTokenWithRtm` with the agent's uid as the
+     * account, so this is the same string — matching `agent_rtc_uid` above.
+     *
+     * **Documented only by example.** This field appears in the request samples
+     * on the `/join` reference page but has no entry in the parameter list, so
+     * there is no stated default and no stated behaviour when it is omitted.
+     * Setting it explicitly removes the guess.
+     */
+    agent_rtm_uid: opts.agentUid,
+    /**
      * The wildcard, in array form. Three phones publish, and the agent must
      * hear all of them for this to be a group conversation rather than three
      * separate dialogues (spec §2.2). The wildcard also covers a contestant who
@@ -154,7 +242,7 @@ export function buildAgentProperties(opts: {
       system_messages: [{ role: "system", content: opts.systemPrompt }],
       max_history: 40,
       greeting_message: opts.greeting,
-      failure_message: "एक मिनट... लाइन में कुछ गड़बड़ है।",
+      failure_message: AGORA_FAILURE_LINE,
       params: { model: optional("LLM_MODEL", "gpt-4o-mini"), stream: true },
     },
 
@@ -227,22 +315,7 @@ export function buildAgentProperties(opts: {
      * latency reads as suspense rather than lag, which is a free pass on the
      * thing that usually damages voice demos — so lean into it.
      */
-    filler_words: {
-      enable: true,
-      trigger: { mode: "fixed_time", config: { response_wait_ms: 1200 } },
-      content: {
-        mode: "static",
-        // `static_config`, not `config`. Agora rejects the latter with a 400
-        // naming this exact path — the nested key differs from the one used by
-        // `trigger`, which really does take `config`.
-        static_config: {
-          // Devanagari, for the same reason as everything else spoken: Bulbul
-          // reads Roman script as English. Length-capped — see FILLER_PHRASES.
-          phrases: FILLER_PHRASES,
-          selection_rule: "shuffle",
-        },
-      },
-    },
+    filler_words: fillerWordsConfig(),
 
     /**
      * Transcripts and agent-state events arrive over RTM, and they need BOTH

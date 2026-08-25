@@ -27,6 +27,7 @@ import {
   publicView,
   secondsLeft,
   wiresBy,
+  wiresRemaining,
   type Game,
   type WireColor,
 } from "./game/state";
@@ -173,7 +174,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: "phone_a_friend",
       description:
-        "Place a real phone call to the contestant's friend, who will hear the hint for the active wire. Once per game. Costs time from the moment the call connects, not from dialling. Only call this after the contestants confirm they want it.",
+        "Place a real phone call to the contestant's friend, who will hear the hint for the active wire. Once per game. Costs time from the moment the call connects, not from dialling. Only call this after the contestants confirm they want it — you do not need to approve it separately first, dialling counts as your approval. A wire must be selected, or there is no hint to read down the phone.",
       parameters: {
         type: "object",
         properties: {
@@ -240,6 +241,13 @@ function stateFor(game: Game) {
     intact: wiresBy(game, "intact"),
     cut: wiresBy(game, "cut"),
     deferred: game.deferred,
+    /**
+     * Not-cut, so parked wires are counted. The model must never work this out
+     * from the lists above — see `wiresRemaining`.
+     */
+    wires_remaining: wiresRemaining(game),
+    wires_remaining_count: wiresRemaining(game).length,
+    round_over: game.phase === "won" || game.phase === "lost",
     active_wire: game.activeWire,
     phase: game.phase,
     live_contestants: livePlayers(game).map((p) => ({ id: p.id, name: p.name })),
@@ -307,11 +315,43 @@ export async function executeTool(
         requireActive: true,
       });
 
+      /**
+       * Tell him to say it out loud.
+       *
+       * Every other tool here returns an `instruction`; this one did not, and the
+       * result was a wire visibly cutting on the projector with no spoken
+       * confirmation — the audience saw the payoff and heard nothing land. The
+       * cut is the single best beat in the loop and it was the one moment the
+       * host was given no direction for.
+       *
+       * Devanagari, like everything spoken, and named parts: yes it is right,
+       * which wire is going, who got it, then straight on. The win case is called
+       * out separately because "that was the last one" needs saying before the
+       * stinger plays over him.
+       */
+      const remaining = result.wiresRemaining;
+      const who = player?.name ?? null;
+      /**
+       * The win comes from the server's phase, not from this count.
+       *
+       * `cutWire` calls `endGame` itself when the last wire goes, so `phase` is
+       * already authoritative by the time we get here. Reading it rather than
+       * re-deriving "is zero" means there is exactly one place in the codebase
+       * that decides the round is over — which is the whole point, and the
+       * absence of it is what let the host announce a win over a board with a
+       * parked wire still on it.
+       */
+      const instruction =
+        game.phase === "won"
+          ? `Correct, and that was the LAST wire — the team has won. Confirm the answer, say the ${color} wire is cut${who ? ` and credit ${who} by name` : ""}, and land the win in one or two short sentences. Devanagari. Something like "बिलकुल सही! ${color} तार कट गया — और यही आख़िरी था। आप जीत गए!" Then stop; the celebration audio plays over you.`
+          : `Correct. Say so before anything else: confirm the answer is right, announce that the ${color} wire is being cut${who ? `, credit ${who} by name` : ""}, and mention how many are left (${remaining}). One or two short sentences, Devanagari — something like "बिलकुल सही जवाब! ${color} तार काट दिया जाता है। ${remaining} बाकी हैं।" Then pick the next wire and ask its riddle.`;
+
       return {
         ok: true,
         ...result,
         color,
         credited_to: player?.name ?? "the team",
+        instruction,
         ...stateFor(game),
       };
     }
@@ -393,6 +433,21 @@ export async function executeTool(
 
     case "phone_a_friend": {
       const playerId = String(args.player_id ?? "");
+      /**
+       * The host dialling *is* the approval.
+       *
+       * `startLifeline` refuses unless `granted` is set, and that gate is right
+       * for the contestant's own button: one careless thumb must not be able to
+       * spend forty-five seconds of a six-minute round. But it was also blocking
+       * the host, and this tool's description tells him to call it "after the
+       * contestants confirm" without ever mentioning a separate approval step.
+       * So the model did exactly as instructed, hit the gate, and told the room
+       * the call could not be made — the reported bug.
+       *
+       * Granting here rather than loosening the check keeps the contestant path
+       * exactly as protected as it was.
+       */
+      grantLifeline(game, playerId || null);
       const result = await startLifeline(game, playerId);
       return { ok: true, ...result, ...stateFor(game) };
     }

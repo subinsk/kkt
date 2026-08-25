@@ -238,3 +238,167 @@ need Console notification setup and a secret, signatures are HMAC-SHA1
 (`Agora-Signature`) and HMAC-SHA256 (`Agora-Signature-V2`) over the raw body,
 and Agora's own guidance is to make handling idempotent "because retries can
 happen".
+
+## Transcripts over RTM: three things that each fail silently — 24 Aug 2026
+
+All three found by `npm run check:browser`, which exists because none of them
+produce an error anywhere. Verified against a live agent.
+
+**1. The agent's token needs RTM privileges, not just RTC.**
+
+The `/join` reference says it under `enable_rtm`: *"make sure the token includes
+both RTC and RTM privileges. When an agent joins an RTM channel, it reuses the
+token specified in the `token` field."* Built with
+`RtcTokenBuilder.buildTokenWithUid`, that token carries RTC only — so the agent
+joins the channel, speaks, and can never join RTM to publish what it said.
+`/join` returns 200 regardless and `GET /agents/{id}` reports `RUNNING`.
+
+Use `RtcTokenBuilder.buildTokenWithRtm(appId, cert, channel, account, role,
+tokenExpire, privilegeExpire)`, which is what the FAQ linked from that page
+recommends. `account` is the agent's uid as a string, matching `agent_rtc_uid`.
+
+**2. The client toolkit does not subscribe the RTM client to the channel.**
+
+`ConversationalAIAPI.subscribeMessage(channel)` attaches
+`addEventListener("message")` to the RTM engine and never calls
+`rtmClient.subscribe(channel)` — readable in `dist/index.js`. It treats the RTM
+lifecycle as the app's job, the same way it treats `rtcClient.join()`. Without
+our own `subscribe()`, the listener is armed on a channel the client never
+joined: login succeeds, nothing errors, no message ever arrives.
+
+Order matters, and the RTM SDK states it: *"You need to listen to events before
+calling, such as `message` ... otherwise you may miss some events."* So
+`AgoraVoiceAI.init()` first, then `rtmClient.subscribe(channel)`.
+
+**3. In `TEXT` render mode there is no in-progress transcript.**
+
+A sentence arrives once, already finished, with `status: END (1)`. `IN_PROGRESS`
+never appears. So a transcript alone cannot tell you *when* the agent started
+talking — only what it said. For the timing, use `AGENT_STATE_CHANGED`, which
+carries `turnID` alongside `state: "speaking"`; `AGENT_SPEAKING_CHANGED` is a
+bare boolean with no turn id and cannot be correlated.
+
+`agent_rtm_uid` is worth setting explicitly. It appears in the `/join` request
+samples but has **no entry in the parameter list**, so there is no documented
+default and no documented behaviour when omitted.
+
+## Transcript `uid` does NOT identify which contestant spoke — 24 Aug 2026
+
+The question AGENTS.md flagged as an hour-one experiment, now answered by
+observation with two contestants seated and a live agent:
+
+```
+{uid:296439 turn:3 status:1 obj:assistant.transcription}   <- the agent's own uid
+{uid:0      turn:2 status:1 obj:user.transcription}        <- every human
+```
+
+The agent's items carry its real `agent_rtc_uid`. **Human items carry `uid: 0`** —
+the field separates the agent from "the humans" collectively and says nothing
+about which of them was talking.
+
+So `lib/game/attribution.ts` is not decoration and never becomes decoration: mic
+level telemetry from each handset is the *only* signal for who spoke, and
+`source: "uid"` in its `Attribution` type is unreachable. `metadata.object`
+(`assistant.transcription` vs `user.transcription`) is the reliable way to tell
+agent turns from human ones — more reliable than the uid comparison, which only
+works because the agent's uid happens to be non-zero.
+
+## SAL cannot arbitrate a multi-contestant floor — 25 Aug 2026
+
+Checked because it is the obvious candidate for "which contestant spoke", and it
+is not one. Source: the `/join` and `/update` references, fetched 25 Aug 2026.
+
+`properties.advanced_features.enable_sal` + `properties.sal` (**Beta**), two
+modes:
+
+- **`locking`** — "The agent locks onto the speaker, blocking 95% of ambient
+  human voices and noise." Seamless mode picks the speaker automatically from
+  whoever "speaks loudly and clearly at the beginning of a conversation".
+- **`recognition`** — voiceprint identification. Identifies speakers and passes
+  the target through `vpids` in the `metadata` field to the LLM (requires
+  `llm.vendor: "custom"`, which we already are). **Only one voiceprint URL is
+  supported**, registered via `sample_urls` as a 16kHz 16-bit mono `.pcm` of
+  10–15 seconds with at least 8 seconds of speech, under 2MB. The name `unknown`
+  is reserved.
+
+Neither fits a three-contestant quiz. `locking` would silence two of the three.
+`recognition` distinguishes one enrolled voice from everyone else, not Rahul from
+Priya from Amit.
+
+**And the lock cannot be moved.** The `/update` request body accepts only
+`properties.token`, `properties.llm.params` and `properties.mllm.params` — `sal`
+is not updatable at runtime. So a lock is fixed for the life of the agent and
+cannot be handed to a different contestant per turn.
+
+What this project does instead is the same idea in our own state: an **exclusive
+floor**, enforced in `setPeerMode`, where going live unpublishes everybody else.
+One publisher means one possible speaker, re-decided on every button press, with
+names we already hold — no voiceprints, no Beta, no session-long lock. See the
+"exclusive floor" section of `npm run check`.
+
+## What the client actually gets, measured — and why exact subtitle sync is not reachable — 25 Aug 2026
+
+Measured against a live agent with `enable_rtm: true`, `data_channel: "rtm"`,
+`enable_metrics: true`, `enable_error_message: true`, the RTM channel subscribed
+with both `withMessage` and `withPresence`, and every toolkit event registered.
+Repeated across several runs.
+
+**1. `TRANSCRIPT_UPDATED` is the only client event that fires reliably.**
+
+Handlers were registered for every event the toolkit exposes, each logging on
+entry. Across several runs nothing but transcripts arrived — no
+`AGENT_STATE_CHANGED`, no `AGENT_SPEAKING_CHANGED`, no `AGENT_INTERRUPTED`, no
+`AGENT_METRICS`, no `AGENT_TURN_FINISHED`.
+
+**Corrected the same day:** a later run *did* produce a `speaking` state change,
+so these are **unreliable rather than absent**. Do not build on them. That
+matters because `AGENT_STATE_CHANGED` is the documented source of "the agent
+started speaking, on turn N" and the only event carrying a `turnID` — so there is
+no dependable turn-start signal from Agora at all. Register it, use it when it
+comes, and never require it.
+
+**2. The transcript arrives once per turn, at the turn's END.**
+
+`status` is always `1` (END). `IN_PROGRESS` never appears in `TEXT` mode. The
+opening greeting is a paragraph, so its transcript lands **forty-odd seconds**
+after the host starts talking — the transcript describes a line that has already
+finished.
+
+**3. Sarvam supplies no word timings, and asking for them is worse.**
+
+`WORD` render mode, with `ENABLE_AUDIO_PTS_METADATA` set before `createClient`
+and `enableRenderModeFallback` both defaulted and set explicitly: no `words[]`
+data ever arrived, **and the agent transcript stopped arriving entirely** while
+user transcripts kept coming. Three runs. So WORD is not a trade of accuracy for
+risk here — it is strictly worse than TEXT.
+
+### The consequence for subtitles
+
+From Agora's client channel we learn *what he said*, *after he said it*, and
+nothing about when he started or how far through he is. So a subtitle cannot be
+driven from it. **Exact word-level sync is not reachable on this stack.**
+
+What *is* exactly synchronised is the audio itself. `IRemoteAudioTrack.getVolumeLevel()`
+is read off the very stream the room is hearing, so it gives an exact start edge
+and an exact end edge. The division of labour that follows:
+
+| Question | Source | Accuracy |
+|---|---|---|
+| When did he start? | audio level | exact |
+| When did he stop? | audio level | exact |
+| What are the words? | our own pre-TTS text, confirmed by the transcript | exact |
+| Was he cut off, and where? | transcript `status: INTERRUPTED` + `spoken` | exact |
+| Where is he *within* a line? | interpolation | **approximate** |
+
+Only the last row is approximate, and its error is bounded by the length of a
+line. Two things reduce it:
+
+- **Measure the rate instead of assuming it.** A completed turn gives a real
+  duration for a known word count, so `wordsPerSecond` is learned per room rather
+  than hardcoded at 2.3. This removes the systematic component, which on a
+  forty-second line is most of the visible error.
+- **Shorten the line.** The residual is proportional to the interval between two
+  exact edges. Speaking one sentence per turn instead of one paragraph puts an
+  exact edge every few seconds, which makes the interpolation imperceptible. This
+  is the remaining lever and it is a change to how we drive TTS, not to how we
+  render.

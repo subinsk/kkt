@@ -19,6 +19,20 @@ import type { GameEvent } from "./game/state";
 
 export type RoomEvent = GameEvent;
 
+/**
+ * How long an action may go unanswered before the button gives up.
+ *
+ * Deliberately generous. The slowest action by a wide margin is `use_lifeline`,
+ * which awaits a Vobiz call placement on the server, so a tight deadline would
+ * abandon requests that were about to succeed — and since aborting the fetch
+ * cannot cancel the server's work, that is the worst outcome available: a call
+ * ringing in someone's pocket that the handset believes never happened.
+ *
+ * Twelve seconds is well past any healthy response and still short enough that a
+ * dead tunnel does not pin a control for the rest of a six-minute round.
+ */
+export const ACTION_TIMEOUT_MS = 12_000;
+
 export function useRoom(code: string) {
   const [game, setGame] = useState<PublicGame | null>(null);
   const [connected, setConnected] = useState(false);
@@ -52,7 +66,17 @@ export function useRoom(code: string) {
     let source: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
-    /** When the live feed last proved it was alive. */
+    /**
+     * When a **tick** last arrived. Only ticks, deliberately.
+     *
+     * This drives the polling fallback below, and it used to be refreshed by
+     * every game event as well — which disarmed the fallback completely. A round
+     * is full of `host_said` and `utterance_*` traffic, so a ticker that had
+     * died went unnoticed: events kept flowing, the speech bubble kept updating,
+     * and the clock and the wire panel silently stopped advancing. That is
+     * exactly the freeze this fallback exists to catch, hidden by the chattiest
+     * events in the system.
+     */
     let lastTick = 0;
 
     const connect = () => {
@@ -71,7 +95,6 @@ export function useRoom(code: string) {
       });
 
       source.addEventListener("game", (e) => {
-        lastTick = Date.now();
         const event = JSON.parse((e as MessageEvent).data) as RoomEvent;
         seqRef.current = Math.max(seqRef.current, event.seq);
 
@@ -97,12 +120,27 @@ export function useRoom(code: string) {
         const t = JSON.parse((e as MessageEvent).data) as {
           secondsLeft: number;
           phase: PublicGame["phase"];
+          seq?: number;
         };
         setGame((prev) =>
           prev
             ? { ...prev, secondsLeft: t.secondsLeft, phase: t.phase }
             : prev,
         );
+        /**
+         * The tick carries the room's sequence number. If it is ahead of the
+         * highest we have applied, events happened that we never saw — so the
+         * board on screen is describing a position that has moved on.
+         *
+         * This is the cheap catch-all for staleness whatever caused it: a
+         * dropped event, a severed stream that reconnected without a snapshot, a
+         * listener that threw. It cost a rehearsal once: the projector showed
+         * four wires cut and a running clock while the round had already been
+         * won, because nothing structural had arrived to trigger a re-read.
+         */
+        if (typeof t.seq === "number" && t.seq > seqRef.current) {
+          void refresh();
+        }
       });
 
       source.onerror = () => {
@@ -160,11 +198,42 @@ export function useRoom(code: string) {
   /** Fire an action and take the returned view as authoritative. */
   const act = useCallback(
     async (payload: Record<string, unknown>) => {
-      const res = await fetch(`/api/room/${encodeURIComponent(code)}/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`/api/room/${encodeURIComponent(code)}/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          /**
+           * Every action gets a deadline.
+           *
+           * Without one, a stalled tunnel does not fail — it hangs, forever, and
+           * the caller's `finally` never runs. On the handset that means a Peer
+           * Talk button stuck on "…" with the mic already flipped the other way,
+           * so the pill says one thing and the host is told another. A button
+           * that reports failure can be pressed again; a button that hangs
+           * cannot.
+           */
+          signal: AbortSignal.timeout(ACTION_TIMEOUT_MS),
+        });
+      } catch (err) {
+        /**
+         * Aborting the request does NOT cancel the work.
+         *
+         * `use_lifeline` awaits a Vobiz call placement on the server, so a
+         * timeout here can easily mean "the call is ringing and the penalty is
+         * charged, we just never heard back". Saying "failed" would be a lie
+         * that invites a second press and a second call, so the message says
+         * what is actually known and points at the screen that does know.
+         */
+        if (err instanceof DOMException && err.name === "TimeoutError") {
+          throw new Error(
+            "No reply from the server. Check the screen before trying again — this may still have gone through.",
+          );
+        }
+        throw err;
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Action failed");
       setGame(data as PublicGame);

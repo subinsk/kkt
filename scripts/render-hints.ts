@@ -151,61 +151,20 @@ async function synthesise(
 }
 
 /**
- * The two outcome stingers — spec §10.1.
+ * The outcome stingers are NOT rendered here — spec §10.1.
  *
- * The spec asks for these to be *recorded* by a human, and a real take will
- * always beat this. But a generated placeholder in the host's own voice beats
- * silence by a very long way: without the files the endgame beat simply does not
- * happen, and it fails quietly.
+ * `public/audio/outcome/win.mp3` and `lose.mp3` are real recorded takes, and
+ * they are committed. This script used to also synthesise a placeholder pair
+ * (`win_wah_kya_baat_hai.wav` / `lose_aag_aag.wav`) in the host's own voice,
+ * which was the right call while there were no real takes and the alternative
+ * was a silent endgame. Now it only leaves two unreferenced files sitting in
+ * the directory, reading as though something still plays them — and this is a
+ * directory where a filename nobody reads is exactly how the endgame beat goes
+ * quiet without anything erroring.
  *
- * Deliberately over-acted. This is the payoff of the whole game.
- *
- * .wav, not .mp3 as the spec names them: Sarvam returns WAV, and a WAV served
- * with an audio/mpeg Content-Type is something browsers may simply refuse to
- * decode. Converting would mean an ffmpeg dependency for no benefit.
+ * If the mp3s ever go missing, `/api/health` says so loudly. That check is the
+ * safety net; a regenerated placeholder is not.
  */
-const OUTCOME_LINES = [
-  {
-    file: "win_wah_kya_baat_hai.wav",
-    text: "वाह! क्या बात है! क्या बात है!",
-    pace: 0.82,
-  },
-  {
-    file: "lose_aag_aag.wav",
-    text: "आग! आग! अरे कोई पानी लाओ!",
-    pace: 1.05,
-  },
-];
-
-async function renderOutcomes(): Promise<number> {
-  const dir = join(process.cwd(), "public", "audio", "outcome");
-  mkdirSync(dir, { recursive: true });
-
-  let ok = 0;
-  for (const line of OUTCOME_LINES) {
-    try {
-      // Full bandwidth here, unlike the hints — these play through room
-      // speakers, not down a phone line.
-      const audio = await synthesise(line.text, {
-        pace: line.pace,
-        sampleRate: 24000,
-        loudness: 1.6,
-      });
-      writeFileSync(join(dir, line.file), audio);
-      ok++;
-      console.log(
-        `  ok   ${line.file.padEnd(28)} ${String(
-          Math.round(audio.length / 1024),
-        ).padStart(4)} KB   ${line.text}`,
-      );
-    } catch (err) {
-      console.log(
-        `  FAIL ${line.file} — ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-  return ok;
-}
 
 async function main() {
   mkdirSync(OUT_DIR, { recursive: true });
@@ -240,16 +199,6 @@ async function main() {
   }
 
   console.log(`\n${ok}/${RIDDLES.length} hints rendered into public/audio/hints/\n`);
-
-  console.log("Rendering outcome stingers\n");
-  const outcomes = await renderOutcomes();
-  console.log(
-    `\n${outcomes}/${OUTCOME_LINES.length} stingers rendered into public/audio/outcome/`,
-  );
-  console.log(
-    "These are generated placeholders. A real human take will beat them —\n" +
-      "replace the files if there is time.\n",
-  );
 
   if (ok < RIDDLES.length) {
     console.log(

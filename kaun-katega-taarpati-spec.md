@@ -423,8 +423,8 @@ Drop your two recordings here, with exactly these names:
 
 ```
 public/audio/outcome/
-├── win_wah_kya_baat_hai.mp3      # "Wah! Kya baat hai!"
-└── lose_aag_aag.mp3              # "Aag! Aag!"
+├── win.mp3                       # "Wah! Kya baat hai!" (recorded take)
+└── lose.mp3                      # "Aag! Aag!" (recorded take)
 ```
 
 Optional extras if you have time to record them — the code below no-ops cleanly if they're absent:
@@ -436,8 +436,8 @@ Optional extras if you have time to record them — the code below no-ops cleanl
 
 ```js
 export const OUTCOME_AUDIO = {
-  win:  "/audio/outcome/win_wah_kya_baat_hai.mp3",
-  lose: "/audio/outcome/lose_aag_aag.mp3"
+  win:  "/audio/outcome/win.mp3",
+  lose: "/audio/outcome/lose.mp3"
 };
 ```
 

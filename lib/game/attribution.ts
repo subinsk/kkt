@@ -107,29 +107,86 @@ export type Attribution = {
   contested: boolean;
   /** 0..1, for the host console and for debugging on the projector. */
   confidence: number;
-  source: "hold" | "level" | "uid" | "none";
+  source: "live" | "hold" | "level" | "uid" | "none";
   scores: Record<string, number>;
 };
 
 /**
- * Integrate each player's level across the utterance window and take the argmax.
+ * Who spoke, cheapest signal first.
+ *
+ * The transcript cannot tell us — Agora mixes the channel and human items come
+ * back as `uid: 0`, verified 24 Aug 2026, see docs/AGORA-NOTES.md. So this is the
+ * only answer available, and it is deliberately layered so the guessing is the
+ * *last* resort rather than the first:
+ *
+ *   1. Only one contestant is published → it was them. A fact, not a score.
+ *   2. Somebody is holding their talk button → it was them. Also a fact.
+ *   3. Otherwise, integrate mic energy over the window and take the argmax.
+ *   4. Too close to call → `contested`, and the host arbitrates by name.
+ *
+ * `candidates` is what makes the first layer possible, and it matters for the
+ * third too: a contestant in Peer Talk is not published to the channel at all,
+ * so the agent could not have heard them no matter how loudly their own handset
+ * measured them. Scoring them would let a lively side-discussion outrank the one
+ * person actually on air — and the cost of that is the host saying the wrong
+ * name out loud.
  */
 export function attribute(
   code: string,
   startMs: number,
   endMs: number,
+  candidates?: string[],
 ): Attribution {
   const timeline = timelineFor(code);
   const scores: Record<string, number> = {};
 
+  /**
+   * Exactly one person is audible, so there is nothing to work out.
+   *
+   * This is the common case by design — Peer Talk keeps handsets muted until a
+   * contestant deliberately goes live — and it is the reason the level heuristic
+   * is a corner case rather than the mechanism. It also sidesteps a question we
+   * have not answered: whether a muted local track still reports a mic level.
+   * If it does, scoring it would be actively harmful; not scoring it makes the
+   * question moot.
+   */
+  if (candidates && candidates.length === 1) {
+    return {
+      playerId: candidates[0],
+      contested: false,
+      confidence: 1,
+      source: "live",
+      scores: {},
+    };
+  }
+
   for (const [playerId, samples] of timeline.samples) {
+    if (candidates && !candidates.includes(playerId)) continue;
     const energy = samples
       .filter((s) => s.t >= startMs && s.t <= endMs)
       .reduce((sum, s) => sum + s.level, 0);
     scores[playerId] = isHolding(code, playerId) ? energy * HOLD_BOOST : energy;
   }
 
-  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  /**
+   * Hold-to-talk is an override, so treat it as one.
+   *
+   * `HOLD_BOOST` multiplies a holder's energy, and the comment above it claimed
+   * that made the override "always win" — it does not. A 4x boost loses to a
+   * neighbour who is six times louder, which is an ordinary gap between a phone
+   * at someone's mouth and a phone across a desk. So a contestant physically
+   * holding the button could still be attributed to somebody else, which is the
+   * one thing a push-to-talk button exists to prevent.
+   *
+   * When anyone is holding, only holders are candidates. The boost still decides
+   * between two people holding at once, and `contested` still applies to them.
+   */
+  const holders = Object.keys(scores).filter((id) => isHolding(code, id));
+  const pool = holders.length
+    ? Object.fromEntries(holders.map((id) => [id, scores[id]]))
+    : scores;
+
+  const ranked = Object.entries(pool).sort((a, b) => b[1] - a[1]);
   const [best, second] = ranked;
 
   if (!best || best[1] < MIN_ENERGY) {
@@ -162,6 +219,35 @@ export function attribute(
 /** Drop a finished room's telemetry so a long-running dev server does not grow. */
 export function clearLevels(code: string) {
   timelines.delete(code);
+}
+
+/**
+ * The window to attribute a finished utterance over.
+ *
+ * `attribute` needs a start and an end, and until now nothing in the system knew
+ * either — which is the entire reason it was never called and every
+ * `setSpeaker()` hardcoded `contested: false`. The 30Hz telemetry from three
+ * phones was being collected into a store nothing read.
+ *
+ * What we actually have, server-side, is the moment the finished transcript
+ * arrived. So the window is derived backwards from it: however long those words
+ * take to say, plus a margin for the end-of-speech detection that had to elapse
+ * before Agora called the turn finished.
+ *
+ * Clamped to the telemetry window, because there are no samples older than that
+ * to integrate and a longer reach would silently include nothing.
+ */
+export function speechWindow(
+  text: string,
+  endMs = Date.now(),
+): { startMs: number; endMs: number } {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const spoken = (Math.max(1, words) / 2.3) * 1000;
+  // Agora's semantic end-of-speech waits ~380ms of silence before finalising, so
+  // the words themselves ended a little before the transcript reached us.
+  const padding = 700;
+  const span = Math.min(spoken + padding, WINDOW_MS);
+  return { startMs: endMs - span, endMs };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -227,4 +313,141 @@ export function isSelfEcho(code: string, transcript: string): boolean {
     if (a.includes(t) || t.includes(a)) return true;
     return trigramSimilarity(a, t) > 0.6;
   });
+}
+
+/**
+ * Remove the host's own words from a transcript and keep whatever is left.
+ *
+ * # The bug this replaces
+ *
+ * `isSelfEcho` answers a yes/no question, and the caller acted on it by
+ * discarding the entire turn. With one person speaking that is correct. With the
+ * room speaker leaking into three open mics *while somebody answers over it*,
+ * both land in a single ASR turn — and because the match is a containment test,
+ * the transcript "…नारियल… <host's whole sentence>" contains the host's line, so
+ * the **answer was thrown away with the echo**, silently, before the model ever
+ * saw it. A contestant answering during the host's sentence simply went unheard.
+ *
+ * So the question is not "is this an echo" but "which part of this is an echo".
+ * Subtract that part and judge what remains.
+ *
+ * # Why the leftovers are still worth keeping
+ *
+ * The remainder is often mangled — a mixed-voice transcript is not clean text.
+ * That is fine, because answer checking is semantic and not string matching: the
+ * host is perfectly capable of reading "नारियल जैसा कुछ" as a coconut. A garbled
+ * real answer reaching him beats a clean silence.
+ *
+ * Returns the empty string when the whole turn was echo, which the caller treats
+ * exactly as the old boolean's `true`.
+ */
+export function stripEcho(code: string, transcript: string): string {
+  const raw = transcript.trim();
+  if (!raw) return "";
+  const t = norm(raw);
+  if (t.length < 6) return raw;
+
+  const recent = (recentAgentSpeech.get(code) ?? []).filter(
+    (u) => u.at > Date.now() - ECHO_WINDOW_MS,
+  );
+
+  let kept = raw;
+  for (const u of recent) {
+    const a = norm(u.text);
+    if (a.length < 6) continue;
+
+    const normKept = norm(kept);
+    /**
+     * Whole-turn match: nothing but echo, or an echo that swallowed the turn.
+     *
+     * `normKept.includes(a)` is the case worth being careful about — it is the
+     * mixed transcript. Rather than dropping everything, cut the matched span
+     * out of the ORIGINAL string and keep the rest.
+     */
+    if (a.includes(normKept)) return "";
+    if (normKept.includes(a)) {
+      kept = cutSpan(kept, a);
+      continue;
+    }
+    // Fuzzy whole-turn match: ASR mangled the echo enough that no exact span
+    // exists to cut, so there is nothing to salvage either.
+    if (trigramSimilarity(a, normKept) > 0.6) return "";
+  }
+
+  // Punctuation and connective debris left where the echo used to be.
+  const cleaned = kept.replace(/\s{2,}/g, " ").replace(/^[\s,।.-]+|[\s,]+$/g, "");
+
+  /**
+   * Keep anything with a letter in it. Do NOT reuse the six-character floor.
+   *
+   * That floor is measured on the normalised string, and `norm` strips combining
+   * marks — a matra is neither \p{L} nor \p{N} — so a Devanagari word normalises
+   * down to its bare consonants. "नारियल" is six characters and normalises to
+   * four, which means the floor was throwing away the canonical answer to the
+   * red-wire riddle. Anything short enough to trip it is exactly the kind of
+   * one-word answer this game is made of.
+   *
+   * The floor still belongs in `isSelfEcho`, where it guards *matching* — being
+   * reluctant to call something an echo is the safe direction. Here it would
+   * guard *keeping*, where the same reluctance is inverted into a bug.
+   *
+   * Same test `sanitizeSpoken` uses in lib/llm.ts for the same reason.
+   */
+  return /\p{L}/u.test(cleaned) ? cleaned : "";
+}
+
+/**
+ * Cut the span matching `needle` out of `haystack`, working in normalised space
+ * but slicing the original.
+ *
+ * The two strings do not line up character for character — `norm` drops
+ * punctuation and collapses whitespace — so the match is located by walking the
+ * original and counting how many normalised characters have been passed. Cruder
+ * than a real alignment, and enough for this: the goal is only to stop the echo
+ * from eating the sentence next to it.
+ */
+function cutSpan(haystack: string, needle: string): string {
+  /**
+   * Cut by whole whitespace tokens rather than by character offsets.
+   *
+   * Two things bit here, both only visible on real input.
+   *
+   * The first attempt walked the original string counting normalised characters.
+   * That is wrong in a way only Devanagari shows: `norm` strips combining marks,
+   * because a matra is neither \p{L} nor \p{N}, so the normalised form of a word
+   * is its bare consonants. The index arithmetic ran one consonant long and the
+   * cut took the first letter of the *answer* with it — "नारियल" came back as
+   * "ारियल", failed the six-character floor, and the turn was thrown away as an
+   * echo. Exactly the bug this function exists to prevent, one layer down.
+   *
+   * Tokens fixed that, and then punctuation broke it: the host's line contains a
+   * standalone em dash, `norm("—")` is empty, and a blank in the middle of a
+   * joined run means it can never equal the target. Hence matching over the
+   * non-empty tokens only, while cutting the original span from first to last —
+   * which takes any punctuation sitting inside the match along with it.
+   */
+  const tokens = haystack.split(/\s+/).filter(Boolean);
+  const words = tokens
+    .map((t, i) => ({ i, n: norm(t) }))
+    .filter((w) => w.n.length > 0);
+  const target = norm(needle);
+  if (!target) return haystack;
+
+  for (let from = 0; from < words.length; from++) {
+    let joined = "";
+    for (let to = from; to < words.length; to++) {
+      joined = joined ? `${joined} ${words[to].n}` : words[to].n;
+      if (joined === target) {
+        const cutFrom = words[from].i;
+        const cutTo = words[to].i;
+        const rest = [
+          ...tokens.slice(0, cutFrom),
+          ...tokens.slice(cutTo + 1),
+        ];
+        return rest.join(" ");
+      }
+      if (joined.length > target.length) break;
+    }
+  }
+  return haystack;
 }

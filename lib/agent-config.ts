@@ -95,6 +95,34 @@ export const FILLER_PHRASES = [
 /** The cap Agora enforces on any filler phrase with non-Latin characters. */
 export const FILLER_PHRASE_MAX_CHARS = 20;
 
+/**
+ * What the host says when our own proxy falls over.
+ *
+ * A constant rather than a literal inside the catch block, for two reasons. It
+ * has to be assertable — it was Roman script, which Bulbul reads as English, so
+ * the one line whose job is to sound calm came out mangled. And it has to be
+ * *emittable*: the proxy streams this straight to TTS, so before it moved here it
+ * was spoken to the room with nothing on the screens, which is the exact
+ * audio-with-no-subtitle divergence the ledger exists to catch.
+ *
+ * Deliberately vague about the cause. "Line mein gadbad" is something a TV host
+ * says; "technical dikkat" is something a developer says.
+ */
+export const PROXY_FALLBACK_LINE =
+  "एक मिनट... लाइन में ज़रा गड़बड़ है। फिर से बोलिए?";
+
+/**
+ * What Agora says when it cannot reach our proxy at all.
+ *
+ * Different failure, different speaker: this one is TTS'd by Agora itself when
+ * `llm.url` does not answer, so our code never runs and cannot emit anything for
+ * it. It is therefore permanently invisible to the screens — worth knowing when
+ * a rehearsal shows the host saying something the projector does not have.
+ *
+ * Kept beside its sibling above so the two cannot drift apart in tone or script.
+ */
+export const AGORA_FAILURE_LINE = "एक मिनट... लाइन में कुछ गड़बड़ है।";
+
 export const SYSTEM_PROMPT = `You are Amitabh bhai, the host of a Hinglish TV quiz show called "Kaun Katega Taarpati". Anywhere from one to four contestants sit across a desk from you — LIVE STATE names exactly who is in the room, and a single contestant playing alone is a normal round, not a problem to comment on. Between you is a prop device with five coloured wires — laal, neela, peela, hara, safed — and a six-minute countdown. Each riddle they solve cuts one wire. Cut all five before the clock runs out and they win; run out and a confetti charge goes off and the office loses coffee-machine access for a week.
 
 Everything you say is spoken aloud through a speaker in the room. There is no screen you can point at.
@@ -117,6 +145,8 @@ makes you unintelligible.
 
 # The single most important rule
 Every turn you receive a block titled LIVE STATE. That block is the truth. The clock, which wires are cut, whose turn it is, what has already been guessed — all of it comes from there and nowhere else. You cannot count seconds. You cannot remember which wire was cut. If LIVE STATE and your memory disagree, LIVE STATE wins, silently. Never say a number for the clock that is not in LIVE STATE.
+
+You also never decide the round is over. LIVE STATE has a line reading ROUND STATUS — while it says RUNNING the game is on, however few wires appear to be left, and you keep asking riddles. Read STILL TO CUT for how many remain; do not work it out from the intact and cut lists, because a DEFERRED wire is parked, not finished, and it still has to be cut. Announcing a win that has not happened is the worst mistake available to you: the screens will contradict you in front of everybody.
 
 # Voice
 - One or two sentences per turn. This is a game show, not a monologue.
@@ -266,6 +296,10 @@ export function liveStateBlock(state: {
   intact: string[];
   cut: string[];
   deferred: string[];
+  /** Not cut — intact AND deferred. Never derived by the model. */
+  remaining: string[];
+  /** "lobby" | "running" | "won" | "lost". The server's word, not a guess. */
+  phase: string;
   activeWire: string | null;
   activeRiddle: string | null;
   activeRiddleHints: string[];
@@ -295,6 +329,23 @@ export function liveStateBlock(state: {
     `Intact wires: ${state.intact.join(", ") || "none"}`,
     `Cut wires: ${state.cut.join(", ") || "none"}`,
     `Deferred (parked, come back to these): ${state.deferred.join(", ") || "none"}`,
+    /**
+     * The line that stops him declaring a win that has not happened.
+     *
+     * "Intact: none" with one wire parked reads as a clear board, and that is
+     * exactly what went wrong: four cut, yellow deferred, and the host announced
+     * the team had won while the clock ran and the panel still showed five wires.
+     * A parked wire is unfinished. So the count is stated, the colours are
+     * stated, and the round's status is stated — none of it left to be worked out.
+     */
+    `STILL TO CUT: ${state.remaining.length} of 5${
+      state.remaining.length ? ` — ${state.remaining.join(", ")}` : ""
+    }. A deferred wire COUNTS as still to cut; parked is not finished.`,
+    state.phase === "won"
+      ? "ROUND STATUS: WON. Every wire is cut."
+      : state.phase === "lost"
+        ? "ROUND STATUS: LOST. The clock ran out."
+        : `ROUND STATUS: RUNNING. The round is NOT over and you must not say it is. You may only announce a win when this line says WON — never by counting the lists above yourself. If wires are still to cut, keep going: pick one and ask its riddle.`,
     `Active wire: ${state.activeWire ?? "NONE — ask which wire they want next"}`,
   ];
 

@@ -27,6 +27,34 @@
 
 import { optional, required } from "./env";
 
+/**
+ * The upstream model, and why the default is a llama and not a gpt-oss.
+ *
+ * This default used to be `openai/gpt-oss-120b`, which contradicted both
+ * `.env.example` and the verified note in AGENTS.md that says to avoid the
+ * gpt-oss family *in this project specifically*. The reason is this file's
+ * whole purpose: the host does not merely talk, it has to decide to call
+ * `cut_wire`, and a brain that chats instead of acting is indistinguishable on
+ * stage from a broken wire panel. The contestant answers correctly, the host
+ * agrees out loud, and nothing is cut — which is the bug the room actually
+ * sees.
+ *
+ * `llama-3.3-70b-versatile` is the balanced pick and the one `.env.example`
+ * already documents: parallel tool calls, decent Hindi, still fast enough that
+ * time-to-first-token does not suffer.
+ */
+function LLM_MODEL(): string {
+  return optional("LLM_MODEL", "llama-3.3-70b-versatile");
+}
+
+/**
+ * The models that accept `reasoning_effort`. Groq's gpt-oss family only.
+ *
+ * Kept as a pattern rather than a list so a future `gpt-oss-*` size does not
+ * silently lose the setting.
+ */
+const REASONING_MODEL = /gpt-oss/i;
+
 /** The internal message shape, which is the OpenAI one. */
 export type Message = {
   role: string;
@@ -103,7 +131,7 @@ async function callOpenAI(
         Authorization: `Bearer ${required("LLM_API_KEY")}`,
       },
       body: JSON.stringify({
-        model: optional("LLM_MODEL", "openai/gpt-oss-120b"),
+        model: LLM_MODEL(),
         messages,
         tools,
         tool_choice: "auto",
@@ -120,11 +148,18 @@ async function callOpenAI(
          */
         max_tokens: Number(optional("LLM_MAX_TOKENS", "1024")),
         /**
-         * Groq-specific, for the gpt-oss family. Omitted entirely when unset so
-         * this same code path still works against OpenAI proper and any other
-         * OpenAI-compatible endpoint that would reject the field.
+         * Groq-specific, for the gpt-oss family — and now actually gated on
+         * that family rather than merely documented as being for it.
+         *
+         * The old condition was "is `LLM_REASONING_EFFORT` set", which made
+         * changing `LLM_MODEL` in `.env.local` a two-line change that looked
+         * like a one-line change: leave the effort variable behind and a
+         * gpt-oss-only parameter goes to a model that does not take it. Omitted
+         * entirely otherwise, so this same path still works against OpenAI
+         * proper and any other OpenAI-compatible endpoint.
          */
-        ...(optional("LLM_REASONING_EFFORT", "")
+        ...(REASONING_MODEL.test(LLM_MODEL()) &&
+        optional("LLM_REASONING_EFFORT", "")
           ? { reasoning_effort: optional("LLM_REASONING_EFFORT", "low") }
           : {}),
       }),
@@ -370,4 +405,125 @@ async function callAnthropic(
     }));
 
   return { content: sanitizeSpoken(text), toolCalls };
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Narrated actions                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Catch the host announcing something he never did.
+ *
+ * # The failure this exists for
+ *
+ * Observed live, from the event log of a real round:
+ *
+ *   +175.7s  host_said  "बिलकुल सही! सफ़ेद तार कट गया। सभी पाँच तार कट गए — आप जीत गए"
+ *   +336.8s  wire_cut   color=white
+ *
+ * The model announced the cut and the win, in character, convincingly — and
+ * never called `cut_wire`. It then spent a hundred and sixty seconds repeating
+ * that the team had won, because as far as it was concerned the wire was already
+ * cut and there was nothing left to do. The contestant had to keep insisting
+ * before it finally performed the action it had already claimed to have taken.
+ *
+ * No amount of prompting reliably fixes this, and no amount of state injection
+ * does either: LIVE STATE was correct the whole time and told it four wires were
+ * cut. The model simply asserted otherwise. The only thing that can stop the
+ * words reaching the room is checking them against the state before they are
+ * spoken, which is what this does.
+ *
+ * # Why this is not overreach
+ *
+ * It is the same job `sanitizeSpoken` already does — remove text that must not
+ * be spoken — applied to a different class of impossible output. A leaked tool
+ * call is machinery the audience should not hear; a false win is a statement the
+ * screens will contradict in front of everybody. Both are the model saying
+ * something the server knows to be untrue.
+ *
+ * Deliberately narrow. It fires only on a claim that contradicts server state:
+ * a colour named as cut when that wire is not cut, or a win claimed while the
+ * round is running. Saying "लाल तार कट गया" about a genuinely cut red wire
+ * passes untouched, and so does everything else the host ever says.
+ */
+
+/**
+ * Devanagari for "cut", in the forms a host actually uses.
+ *
+ * Note `गए` — it is ग + ए, a separate vowel letter, NOT ग + य. The first version
+ * of this matched only `गय` and so was blind to "कट गए", which is the commonest
+ * form there is and the exact wording of the line that prompted all of this. A
+ * detector that cannot see its own motivating example is worse than none, so the
+ * completive endings are spelled out rather than approximated.
+ */
+const CUT_VERB =
+  /(कट\s*(गया|गये|गए|गई|गईं)|कट\s*चुक|काट\s*(दिया|दिये|दिए|दी|दीं)|काट\s*चुक|कटा\s)/;
+
+/**
+ * Devanagari for "won", completive only.
+ *
+ * Deliberately not a bare `जीत`: "जीतने के लिए एक तार बाकी है" — one wire left to
+ * win — is a perfectly true and useful thing for the host to say, and blocking it
+ * would make the guard worse than the bug. Only a *completed* win is a claim.
+ */
+const WIN_CLAIM =
+  /(जीत\s*(गया|गये|गए|गई|लिया|लिये|लिए|हुई|हुआ|आपके)|आप\s*जीत|डिफ्यूज|बम\s*बच)/;
+
+export type ClaimCheck =
+  | { ok: true }
+  | { ok: false; reason: string; correction: string };
+
+export function checkSpokenClaims(
+  text: string,
+  state: {
+    /** Devanagari names of wires that really are cut. */
+    cutDev: string[];
+    /** Devanagari names of wires still to cut. */
+    remainingDev: string[];
+    phase: string;
+  },
+): ClaimCheck {
+  if (!text.trim()) return { ok: true };
+
+  const remainingList = state.remainingDev.join(", ");
+  const stillToCut =
+    state.remainingDev.length === 1
+      ? `अभी ${remainingList} तार बाकी है`
+      : `अभी ${state.remainingDev.length} तार बाकी हैं — ${remainingList}`;
+
+  /* -- a win that has not happened --------------------------------------- */
+  if (WIN_CLAIM.test(text) && state.phase !== "won") {
+    return {
+      ok: false,
+      reason: `claimed a win while the round is ${state.phase} with ${state.remainingDev.length} wire(s) still to cut`,
+      correction: `एक मिनट — ${stillToCut}। चलिए, जवाब बताइए।`,
+    };
+  }
+
+  /* -- a cut that has not happened --------------------------------------- */
+  if (CUT_VERB.test(text)) {
+    for (const dev of state.remainingDev) {
+      if (text.includes(dev)) {
+        return {
+          ok: false,
+          reason: `claimed the ${dev} wire was cut, but it is not`,
+          correction: `एक मिनट — ${dev} तार अभी कटा नहीं है। जवाब फिर से बताइए।`,
+        };
+      }
+    }
+    /**
+     * "सभी पाँच तार कट गए" names no colour, so the loop above cannot catch it.
+     * A claim that everything is cut is false whenever anything remains.
+     */
+    if (/(सभी|सारे|पाँचों|पाँच)/.test(text) && state.remainingDev.length > 0) {
+      return {
+        ok: false,
+        reason: `claimed every wire was cut with ${state.remainingDev.length} still to cut`,
+        correction: `एक मिनट — ${stillToCut}। चलिए, जवाब बताइए।`,
+      };
+    }
+  }
+
+  return { ok: true };
 }

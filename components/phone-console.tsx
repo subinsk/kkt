@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRoom, formatClock } from "@/lib/use-room";
+import { useHostLine } from "@/lib/use-host-line";
 import { RoomGone } from "@/components/room-gone";
 import {
   useAgora,
@@ -273,7 +274,6 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const { game, connected, missing, onEvent, act } = useRoom(code);
   const [peerMode, setPeerMode] = useState(true);
   const [pending, setPending] = useState(false);
-  const [hostSaid, setHostSaid] = useState<string | null>(null);
   const [lifelineNote, setLifelineNote] = useState<string | null>(null);
 
   /** Drop a stale lifeline message the moment the host acts on it. */
@@ -282,15 +282,29 @@ function Console({ code, session }: { code: string; session: Joined }) {
   }, [game?.lifeline.granted]);
 
   /** Feed the speech bubble in the handset's own view of the set. */
-  useEffect(
-    () =>
-      onEvent((event) => {
-        if (event.type === "host_said" || event.type === "agent_spoke") {
-          setHostSaid(String(event.payload.text ?? ""));
-        }
-      }),
-    [onEvent],
-  );
+  const { line: hostLine, lineDone } = useHostLine(onEvent);
+
+  /**
+   * Follow the server's view of whether this handset is on air.
+   *
+   * The floor is exclusive — somebody else going live mutes us — and that
+   * decision is made on the server. But the *publishing* decision lives here:
+   * the server flipping a flag does not take a track off the wire. Without this
+   * effect the two disagree in the worst direction, with our mic still
+   * publishing while LIVE STATE tells the host he cannot hear us — so he ignores
+   * a contestant who is talking to him, and attribution names the wrong person
+   * with total confidence.
+   *
+   * Skipped while a toggle of our own is in flight, so a snapshot that predates
+   * our own press cannot undo it.
+   */
+  const serverPeerMode = game?.players.find(
+    (p) => p.id === session.player.id,
+  )?.peerMode;
+  useEffect(() => {
+    if (pending || serverPeerMode === undefined) return;
+    if (serverPeerMode !== peerMode) setPeerMode(serverPeerMode);
+  }, [serverPeerMode, pending, peerMode]);
 
   const lifelineSpent = game?.lifeline.used ?? false;
   const lifelineActive = game?.lifeline.activeFor === session.player.id;
@@ -318,23 +332,29 @@ function Console({ code, session }: { code: string; session: Joined }) {
   const unlockStingers = () => {
     if (Object.keys(stingers.current).length) return;
     for (const [key, src] of Object.entries({
-      won: "/audio/outcome/win_wah_kya_baat_hai.wav",
-      lost: "/audio/outcome/lose_aag_aag.wav",
+      won: "/audio/outcome/win.mp3",
+      lost: "/audio/outcome/lose.mp3",
     })) {
       const audio = new Audio(src);
       audio.preload = "auto";
-      // Quieter than the room speaker — this is a companion, not the source.
+      // Muted for the priming play() only — see rearm below.
       audio.volume = 0;
-      audio
-        .play()
-        .then(() => {
-          audio.pause();
-          audio.currentTime = 0;
-          audio.volume = 0.55;
-        })
-        .catch(() => {
-          // A missing file is reported by /api/health, not shouted about here.
-        });
+      /**
+       * Restore the real volume whether the priming play resolved or rejected.
+       *
+       * This used to live only in `.then()`, which meant a rejected unlock — the
+       * common case, since a toggle press is not always a strong enough gesture
+       * — left `volume` at 0 permanently. The stinger then "played" at the
+       * payoff in perfect silence, with nothing in any log to say so. The stage
+       * had the identical bug.
+       */
+      const rearm = () => {
+        audio.pause();
+        audio.currentTime = 0;
+        // Quieter than the room speaker — this is a companion, not the source.
+        audio.volume = 0.55;
+      };
+      audio.play().then(rearm).catch(rearm);
       stingers.current[key] = audio;
     }
   };
@@ -541,7 +561,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
             game={game}
             agentLevelRef={agora.agentLevelRef}
             minimal
-            hostSaid={hostSaid}
+            hostLine={hostLine}
+            onLineDone={lineDone}
             className="absolute inset-0"
           />
         </div>
@@ -620,7 +641,8 @@ function Console({ code, session }: { code: string; session: Joined }) {
             agentLevelRef={agora.agentLevelRef}
             minimal
             interactive
-            hostSaid={hostSaid}
+            hostLine={hostLine}
+            onLineDone={lineDone}
             className="absolute inset-0"
           />
           {/* Fade the bottom edge into the panel below it. */}

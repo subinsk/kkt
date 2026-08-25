@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useHostLine, idOf } from "@/lib/use-host-line";
+import { useAckReporter } from "@/lib/rtm";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { StageCanvas } from "@/components/stage/stage-canvas";
@@ -31,7 +33,6 @@ export default function HostConsole({ code }: { code: string }) {
   const [credentials, setCredentials] = useState<AgoraCredentials | null>(null);
   const [minimal, setMinimal] = useState(false);
   const [resetToken, setResetToken] = useState(0);
-  const [hostSaid, setHostSaid] = useState<string | null>(null);
 
   /**
    * Join the channel as a monitor: subscribed, publishing nothing, playing
@@ -59,15 +60,48 @@ export default function HostConsole({ code }: { code: string }) {
   }, [code]);
 
   /** Mirror the host's speech into the preview bubble. */
-  useEffect(
-    () =>
-      onEvent((event) => {
-        if (event.type === "host_said" || event.type === "agent_spoke") {
-          setHostSaid(String(event.payload.text ?? ""));
+  const { line: hostLine, lineDone } = useHostLine(onEvent);
+
+  /**
+   * Report the host's real transcript inward, so the ledger has acks to act on.
+   *
+   * Silent no-op without an `rtmToken`, and every failure inside it leaves the
+   * room `degraded` — which falls back to timing the subtitle off the audio
+   * level, exactly as before this existed.
+   */
+  useAckReporter({
+    code,
+    credentials,
+    clientRef: agora.clientRef,
+    joined: agora.joined,
+  });
+
+  /**
+   * Server truth when the acks are flowing; the local queue when they are not.
+   *
+   * These are the two halves of a fail-closed design. With a reporter alive, the
+   * ledger knows which line is actually being spoken and how much of it came
+   * out, so that wins. With nobody reporting, insisting on acks would mean no
+   * subtitles at all — so the client-side queue takes over and the line is timed
+   * off the audio level.
+   *
+   * For an interrupted line the text shown is what was actually SPOKEN, not what
+   * was intended. That is the whole point of keeping the two apart: printing the
+   * rest of a riddle the room never heard hands over the answer.
+   */
+  const degraded = game?.host?.degraded ?? true;
+  const served = game?.host?.current ?? null;
+  const line =
+    !degraded && served
+      ? {
+          id: idOf(served.id),
+          text:
+            served.status === "interrupted" && served.spoken
+              ? served.spoken
+              : served.text,
         }
-      }),
-    [onEvent],
-  );
+      : hostLine;
+  const lineStatus = degraded ? null : (served?.status ?? null);
 
   async function run(label: string, payload: Record<string, unknown>) {
     setBusy(label);
@@ -223,7 +257,10 @@ export default function HostConsole({ code }: { code: string }) {
               minimal={minimal}
               interactive
               resetToken={resetToken}
-              hostSaid={hostSaid}
+              hostLine={line}
+              lineStatus={lineStatus}
+              wordsPerSecond={game?.host?.wordsPerSecond ?? null}
+              onLineDone={lineDone}
               className="absolute inset-0"
             />
 
@@ -557,15 +594,9 @@ export default function HostConsole({ code }: { code: string }) {
                 >
                   All → peer
                 </button>
-                <button
-                  className="btn"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    run("all live", { type: "all_peer_mode", peerMode: false })
-                  }
-                >
-                  All → live
-                </button>
+                {/* No "All → live": the floor is exclusive, so one contestant
+                    is on air at a time. See `setPeerMode` for why that is what
+                    makes attribution exact rather than a mic-level guess. */}
               </div>
             </section>
 

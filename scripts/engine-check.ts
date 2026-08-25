@@ -11,6 +11,7 @@
 
 import {
   addPlayer,
+  allPeerMode,
   createGame,
   getGame,
   listGames,
@@ -23,6 +24,7 @@ import {
   lifelineFailed,
   beginLifeline,
   pauseClock,
+  recordUserTurn,
   recordWrongAnswer,
   resetGame,
   resumeClock,
@@ -33,22 +35,52 @@ import {
   startGame,
 } from "../lib/game/store";
 import {
+  findPlayer,
   PENALTY_HINT,
   ROOM_TTL_MS,
   PENALTY_LIFELINE,
   PENALTY_WRONG,
   WIRE_COLORS,
+  wiresBy,
+  wiresRemaining,
   livePlayers,
   secondsLeft,
   publicView,
 } from "../lib/game/state";
 import { RIDDLES, answerKey, riddleForWire } from "../lib/game/riddles";
-import { sanitizeSpoken } from "../lib/llm";
+import { checkSpokenClaims, sanitizeSpoken } from "../lib/llm";
 import {
+  AGORA_FAILURE_LINE,
   FILLER_PHRASES,
   FILLER_PHRASE_MAX_CHARS,
+  PROXY_FALLBACK_LINE,
+  liveStateBlock,
   openingLine,
 } from "../lib/agent-config";
+import { SPEAK_TEXT_MAX_BYTES, fillerWordsConfig } from "../lib/agora-rest";
+import { normaliseFrom, normaliseTo } from "../lib/vobiz";
+import {
+  DEGRADE_AFTER_MS,
+  currentUtterance,
+  isDegraded,
+} from "../lib/game/state";
+import {
+  attribute,
+  recordLevels,
+  speechWindow,
+  rememberAgentUtterance,
+  setHolding,
+  stripEcho,
+} from "../lib/game/attribution";
+import {
+  applyAck,
+  divergences,
+  findUtterance,
+  registerAgoraLines,
+  registerUtterance,
+  sweepUtterances,
+} from "../lib/game/utterances";
+import { LIFELINE_LINES } from "../lib/game/host-speak";
 import {
   MAX_CUE_CHARS,
   SPOKEN_WORDS_PER_SECOND,
@@ -128,11 +160,219 @@ check(
   `got ${game.lastSpeaker}`,
 );
 setPeerMode(game, priya.id, false);
-check("two can go live together", livePlayers(game).length === 2);
+// The floor is exclusive now: Priya going live takes Rahul off air rather than
+// joining him. Asserted properly in the "exclusive floor" section above.
+check("a second contestant replaces the first", livePlayers(game).length === 1);
+check("and it is the one who just pressed", game.lastSpeaker === priya.id);
 setPeerMode(game, priya.id, true);
-setPeerMode(game, rahul.id, true);
 check("back to all-discussing", livePlayers(game).length === 0);
 check("nobody attributed when silent", game.lastSpeaker === null);
+
+/* -- an exclusive floor --------------------------------------------------- */
+/**
+ * One contestant on air at a time.
+ *
+ * This is what makes attribution exact rather than a mic-level argmax, so the
+ * invariant is load-bearing: if two handsets are ever live together, the ledger
+ * still reports `source: "live"` with confidence 1 and names one of them for no
+ * reason. Worth asserting rather than trusting.
+ */
+console.log("\nexclusive floor");
+{
+  const g = createGame({ code: "EXCL" });
+  const a = addPlayer(g, { name: "Rahul" });
+  const b = addPlayer(g, { name: "Priya" });
+  const c = addPlayer(g, { name: "Amit" });
+
+  setPeerMode(g, a.id, false);
+  check("one contestant goes live", livePlayers(g).map((p) => p.id).join() === a.id);
+
+  setPeerMode(g, b.id, false);
+  const live = livePlayers(g).map((p) => p.id);
+  check("a second going live takes the first off air", live.join() === b.id, live.join());
+  check("and never leaves two on air together", live.length === 1);
+  check("the third was untouched and stays muted", findPlayer(g, c.id)?.peerMode === true);
+
+  setPeerMode(g, b.id, true);
+  check("stepping back leaves nobody live", livePlayers(g).length === 0);
+
+  throws("and 'everybody live' is refused outright", () => allPeerMode(g, false));
+  allPeerMode(g, true);
+  check("while 'everybody to peer' still works", livePlayers(g).length === 0);
+}
+
+/* -- a parked wire is not a finished wire --------------------------------- */
+/**
+ * The conflict this prevents, seen live: four wires cut, the fifth *deferred*,
+ * and the host announced the team had won — while the clock was still running
+ * and the panel still showed five wires. The board and the server were in
+ * perfect agreement; it was the host's belief that had drifted.
+ *
+ * The cause was a state block that listed `intact` and `cut` and left the model
+ * to work out the rest. With one wire parked, "Intact wires: none" reads as a
+ * clear board. AGENTS.md is explicit that the model is *told* state and never
+ * computes it, so the count and the round's status are now both stated outright.
+ */
+console.log("\nparked is not finished");
+{
+  const g = createGame({ code: "PARK" });
+  addPlayer(g, { name: "Rahul" });
+  startGame(g);
+
+  // Cut four, park the fifth — exactly the board from the screenshot.
+  for (const color of ["red", "blue", "green", "white"] as const) {
+    g.activeWire = color;
+    cutWire(g, color, null);
+  }
+  selectWire(g, "yellow");
+  deferWire(g, "yellow");
+
+  check("four are cut", wiresBy(g, "cut").length === 4);
+  check("none are intact", wiresBy(g, "intact").length === 0);
+  check("but one is still to cut", wiresRemaining(g).length === 1);
+  check("and it is the parked one", wiresRemaining(g)[0] === "yellow");
+  check("the round has NOT been won", g.phase === "running");
+
+  const block = liveStateBlock({
+    secondsLeft: 35,
+    intact: wiresBy(g, "intact"),
+    cut: wiresBy(g, "cut"),
+    deferred: g.deferred,
+    remaining: wiresRemaining(g),
+    phase: g.phase,
+    activeWire: g.activeWire,
+    activeRiddle: null,
+    activeRiddleHints: [],
+    hintsGivenOnActive: 0,
+    activeAnswer: null,
+    activeAccept: [],
+    activeReject: [],
+    nearMissNotes: "",
+    hintsUsed: 0,
+    lifelineUsed: false,
+    lifelineStatus: "idle",
+    lifelineRequestedBy: null,
+    lastSpeaker: null,
+    contested: false,
+    wrongAnswers: [],
+    players: ["Rahul"],
+    paused: false,
+  });
+
+  check(
+    "LIVE STATE says how many are still to cut, in words the host cannot misread",
+    /STILL TO CUT: 1 of 5/.test(block),
+    block.split("\n").find((l) => l.includes("STILL TO CUT")) ?? "line missing",
+  );
+  check("and names the parked wire as one of them", /STILL TO CUT: 1 of 5 — yellow/.test(block));
+  check(
+    "and states outright that the round is not over",
+    /ROUND STATUS: RUNNING/.test(block) && /must not say it is/.test(block),
+  );
+  check(
+    "so 'Intact wires: none' can no longer read as a clear board",
+    block.includes("Intact wires: none") && block.includes("STILL TO CUT: 1"),
+  );
+
+  // And when the last one really does go, the status flips on its own.
+  selectWire(g, "yellow");
+  cutWire(g, "yellow", null);
+  check("cutting the parked wire wins the round", g.phase === "won");
+  check("and nothing remains", wiresRemaining(g).length === 0);
+}
+
+/* -- a claim the server knows is false never reaches the room ------------- */
+/**
+ * The exact failure, from the event log of a real round:
+ *
+ *   +175.7s  host_said  "बिलकुल सही! सफ़ेद तार कट गया। सभी पाँच तार कट गए — आप जीत गए"
+ *   +336.8s  wire_cut   color=white
+ *
+ * The host announced the cut and the win and never called `cut_wire`. For the
+ * hundred and sixty seconds in between he simply repeated that the team had won,
+ * because as far as he was concerned there was nothing left to do — and the
+ * contestant had to keep insisting before the action he had already announced
+ * actually happened.
+ *
+ * LIVE STATE was right the whole time. Telling the model the truth is therefore
+ * not sufficient, and these assert the last line of defence: the words are
+ * checked against the board before they are spoken.
+ */
+console.log("\nfalse claims");
+{
+  /** Whatever we substitute must not itself contain a win claim. */
+  const WIN_CLAIM_SHAPE = /(जीत\s*(गए|गये|गया)|आप\s*जीत)/;
+  const dev = (cs: string[]) => cs;
+  const fourCut = {
+    cutDev: dev(["लाल", "नीला", "पीला", "हरा"]),
+    remainingDev: dev(["सफ़ेद"]),
+    phase: "running",
+  };
+
+  const theRealOne =
+    "बिलकुल सही! सफ़ेद तार कट गया। सभी पाँच तार कट गए — आप जीत गए, सबिन!";
+  const verdict = checkSpokenClaims(theRealOne, fourCut);
+  check("the line from the live round is refused", !verdict.ok);
+  check(
+    "and something true is said instead",
+    !verdict.ok &&
+      verdict.correction.includes("सफ़ेद") &&
+      !WIN_CLAIM_SHAPE.test(verdict.correction),
+    !verdict.ok ? verdict.correction : "",
+  );
+
+  check(
+    "a bare win claim while the round runs is refused",
+    !checkSpokenClaims("आप जीत गए!", fourCut).ok,
+  );
+  check(
+    "so is claiming every wire is cut",
+    !checkSpokenClaims("सभी पाँच तार कट गए।", fourCut).ok,
+  );
+  check(
+    "so is naming an uncut wire as cut",
+    !checkSpokenClaims("सफ़ेद तार काट दिया जाता है।", fourCut).ok,
+  );
+
+  /* -- and none of this may touch what he legitimately says ------------- */
+  check(
+    "a cut he really did make passes untouched",
+    checkSpokenClaims("बिलकुल सही! हरा तार कट गया। एक तार बाकी है।", fourCut).ok,
+  );
+  check(
+    "asking the riddle passes untouched",
+    checkSpokenClaims("सफ़ेद तार का सवाल — ऐसी कौन सी चीज़ है जो रोज़ आती है?", fourCut).ok,
+  );
+  check(
+    "a wrong-answer nudge passes untouched",
+    checkSpokenClaims("नहीं, वो जवाब नहीं है। फिर से सोचिए।", fourCut).ok,
+  );
+  check(
+    "and the real win, once the server agrees, is spoken",
+    checkSpokenClaims("सभी पाँच तार कट गए — आप जीत गए!", {
+      cutDev: dev(["लाल", "नीला", "पीला", "हरा", "सफ़ेद"]),
+      remainingDev: [],
+      phase: "won",
+    }).ok,
+  );
+}
+
+/* -- the two phone number formats ----------------------------------------- */
+/**
+ * `from` takes E.164 *without* the plus; `to` takes it *with*. Both fields hold
+ * "a phone number", both look right to a human, and guessing wrong surfaces only
+ * as the host saying the call could not be placed. So the env is read forgivingly
+ * and normalised in one place.
+ */
+console.log("\nphone number formats");
+{
+  check("a from-number keeps its digits and loses the plus", normaliseFrom("+918071579253") === "918071579253");
+  check("and is left alone when already correct", normaliseFrom("918071579253") === "918071579253");
+  check("spaces and dashes are cleaned out", normaliseFrom(" 91-807 157 9253 ") === "918071579253");
+  check("a to-number gains the plus", normaliseTo("918094774065") === "+918094774065");
+  check("and keeps it when present", normaliseTo("+918094774065") === "+918094774065");
+  check("an empty to-number stays empty rather than becoming a bare plus", normaliseTo("") === "");
+}
 
 /* -- spoken script ------------------------------------------------------- */
 /**
@@ -196,6 +436,61 @@ for (const phrase of FILLER_PHRASES) {
 check(
   "filler phrases are Devanagari",
   !FILLER_PHRASES.some((f) => HAS_ROMAN.test(f)),
+);
+
+/**
+ * The filler_words payload shape.
+ *
+ * `trigger` takes `fixed_time_config` and `content` takes `static_config` —
+ * neither is plain `config`, and the asymmetry is exactly what got this wrong.
+ * Agora accepts the request either way and then ignores the threshold, so there
+ * is no 400 to notice and no log line to read: fillers simply fire on the server
+ * default instead of the number in the file. See docs/AGORA-NOTES.md, 24 Aug
+ * 2026, where the key names are confirmed against all four samples on the page.
+ */
+const filler = fillerWordsConfig();
+check(
+  "filler trigger uses fixed_time_config, not config",
+  typeof filler.trigger.fixed_time_config?.response_wait_ms === "number",
+  `keys: ${Object.keys(filler.trigger).join(", ")}`,
+);
+check(
+  "filler content uses static_config",
+  Array.isArray(filler.content.static_config?.phrases),
+);
+check(
+  "filler response_wait_ms is inside Agora's documented 100–10000 range",
+  filler.trigger.fixed_time_config.response_wait_ms >= 100 &&
+    filler.trigger.fixed_time_config.response_wait_ms <= 10000,
+  `${filler.trigger.fixed_time_config.response_wait_ms}ms`,
+);
+
+/**
+ * Every line the host is made to say verbatim, measured.
+ *
+ * Two independent ways these fail silently. `/speak` caps `text` at **512
+ * bytes**, not characters, and Devanagari spends three bytes per code point — so
+ * the real ceiling is about 170 characters and a line that reads short can be
+ * over it. And a Roman-script line is read as English by Bulbul, which is the
+ * repo-wide rule these two fallbacks were quietly breaking.
+ */
+for (const [name, line] of Object.entries(LIFELINE_LINES)) {
+  check(
+    `lifeline line "${name}" fits the /speak 512-byte cap`,
+    Buffer.byteLength(line, "utf8") <= SPEAK_TEXT_MAX_BYTES,
+    `${Buffer.byteLength(line, "utf8")} bytes`,
+  );
+  check(`lifeline line "${name}" is Devanagari`, !HAS_ROMAN.test(line));
+}
+check(
+  "the proxy's own fallback line is Devanagari",
+  !HAS_ROMAN.test(PROXY_FALLBACK_LINE),
+  PROXY_FALLBACK_LINE,
+);
+check(
+  "Agora's llm.failure_message is Devanagari",
+  !HAS_ROMAN.test(AGORA_FAILURE_LINE),
+  AGORA_FAILURE_LINE,
 );
 
 /* -- solo round ----------------------------------------------------------- */
@@ -770,6 +1065,546 @@ check(
   "events carry monotonic sequence numbers",
   lossGame.events.every((e, i, all) => i === 0 || e.seq > all[i - 1].seq),
 );
+
+/* -- the utterance ledger ------------------------------------------------- */
+/**
+ * The acknowledgement machine.
+ *
+ * Every case here is a failure that is invisible without an assertion: nothing
+ * throws, nothing logs, and the only symptom is the host and the screen
+ * disagreeing in a room with an audience in it. They are driven with an injected
+ * `now` and a fake re-speak, so a six-second deadline is tested in no time at all
+ * and without a network.
+ *
+ * `phase` is set directly rather than through `startGame`, because these assert
+ * the watchdog and not the round rules, and going in through the front door would
+ * put a contestant on air — which the retry logic correctly refuses to talk over.
+ */
+console.log("\nutterance ledger");
+{
+  const mk = () => {
+    const g = createGame({ code: "ACK1" });
+    g.phase = "running";
+    g.startedAt = Date.now();
+    return g;
+  };
+
+  /* -- a line nobody ever heard: one retry, then give up ----------------- */
+  {
+    const g = mk();
+    const u = registerUtterance(g, "turn", "लाल तार काटिए");
+    const said: string[] = [];
+    const t0 = Date.now();
+
+    sweepUtterances(g, (t) => said.push(t), t0 + 100);
+    check(
+      "a pending line is left alone before its deadline",
+      findUtterance(g, u.id)?.status === "pending",
+    );
+
+    sweepUtterances(g, (t) => said.push(t), t0 + 3000);
+    check(
+      "past the start deadline it is declared lost",
+      findUtterance(g, u.id)?.status === "lost",
+    );
+    check("and it is re-spoken exactly once", said.length === 1, `${said.length}`);
+    check("with the same words", said[0] === "लाल तार काटिए");
+
+    // The retry is its own record, linked back, and carries attempt 2.
+    const retry = g.utterances.items.find((x) => x.retryOf === u.id);
+    check("the retry is a separate linked record", !!retry && retry.attempts === 2);
+
+    // Nobody hears the retry either.
+    sweepUtterances(g, (t) => said.push(t), t0 + 9000);
+    check(
+      "a retry nobody hears is abandoned, not retried again",
+      retry !== undefined && findUtterance(g, retry.id)?.status === "abandoned",
+    );
+    check("so it is never spoken a third time", said.length === 1, `${said.length}`);
+    check("and it is counted as a divergence", divergences(g).abandoned === 1);
+  }
+
+  /* -- a retry that no longer makes sense -------------------------------- */
+  {
+    const g = mk();
+    g.activeWire = "red";
+    const u = registerUtterance(g, "turn", "लाल तार का सवाल");
+    const said: string[] = [];
+    // The round moved on while the line was in flight.
+    g.activeWire = "blue";
+    sweepUtterances(g, (t) => said.push(t), Date.now() + 3000);
+    check(
+      "a line about a wire the round has left is abandoned, not re-asked",
+      findUtterance(g, u.id)?.status === "abandoned",
+    );
+    check("and nothing is spoken", said.length === 0);
+  }
+
+  /* -- he started, so the room heard him --------------------------------- */
+  {
+    const g = mk();
+    const u = registerUtterance(g, "turn", "एक दो तीन चार पाँच");
+    const said: string[] = [];
+    applyAck(g, { turnId: 11, status: "speaking", text: "एक दो तीन", atMs: Date.now() });
+    check("a speaking ack claims the oldest waiting line", findUtterance(g, u.id)?.status === "speaking");
+
+    sweepUtterances(g, (t) => said.push(t), Date.now() + 60_000);
+    check(
+      "a missing END ack fails OPEN — the line is closed, not re-spoken",
+      findUtterance(g, u.id)?.status === "ended",
+    );
+    check(
+      "because re-speaking would duplicate audio the room already got",
+      said.length === 0,
+    );
+  }
+
+  /* -- late acks are recorded, never applied ----------------------------- */
+  {
+    const g = mk();
+    const u = registerUtterance(g, "turn", "देर से आया जवाब");
+    sweepUtterances(g, () => {}, Date.now() + 3000);
+    sweepUtterances(g, () => {}, Date.now() + 9000);
+    // The original ends at `lost` and stays there — the retry is what gets
+    // abandoned. `lost` is terminal precisely so the ack below cannot revive it.
+    check("the original line is finished with", findUtterance(g, u.id)?.status === "lost");
+    check(
+      "and its retry is the record that was abandoned",
+      g.utterances.items.find((x) => x.retryOf === u.id)?.status === "abandoned",
+    );
+
+    // Tie a turn id to it the way a real ack would, then ack it far too late.
+    findUtterance(g, u.id)!.turnId = 42;
+    const verdict = applyAck(g, {
+      turnId: 42,
+      status: "ended",
+      text: "देर से आया जवाब",
+      atMs: Date.now(),
+    });
+    check("a late ack is reported as late", verdict === "late");
+    check(
+      "and does NOT resurrect the line",
+      findUtterance(g, u.id)?.status === "lost",
+    );
+    check("it is counted instead", divergences(g).lateAcks === 1);
+  }
+
+  /* -- idempotence, so any number of reporters is safe ------------------- */
+  {
+    const g = mk();
+    registerUtterance(g, "turn", "दो बार बोला गया");
+    const ack = {
+      turnId: 7,
+      status: "speaking" as const,
+      text: "दो बार",
+      atMs: Date.now(),
+    };
+    check("the first reporter is applied", applyAck(g, ack) === "applied");
+    check("a second reporter saying the same thing is a no-op", applyAck(g, ack) === "duplicate");
+    check(
+      "so two open projectors are redundancy, not a race",
+      g.utterances.items.filter((u) => u.turnId === 7).length === 1,
+    );
+  }
+
+  /* -- what Agora says on its own ---------------------------------------- */
+  {
+    const g = mk();
+    registerAgoraLines(FILLER_PHRASES, [AGORA_FAILURE_LINE]);
+    applyAck(g, { turnId: 3, status: "speaking", text: "हम्म", atMs: Date.now() });
+    const filler = g.utterances.items.find((u) => u.turnId === 3);
+    check("an unprompted line we recognise is logged as a filler", filler?.origin === "filler");
+    check("observed lines start already speaking, with no deadline to miss", filler?.status === "speaking");
+
+    const said: string[] = [];
+    sweepUtterances(g, (t) => said.push(t), Date.now() + 60_000);
+    check("and a filler is never re-spoken — Agora chose it, not us", said.length === 0);
+
+    applyAck(g, { turnId: 4, status: "speaking", text: "कुछ और ही बोल दिया", atMs: Date.now() });
+    check(
+      "a line nothing on our side chose is flagged unattributed",
+      g.utterances.items.find((u) => u.turnId === 4)?.origin === "unattributed",
+    );
+    check("and counted", divergences(g).unattributed === 1);
+  }
+
+  /* -- an ack finds its own line, not merely the oldest one --------------- */
+  /**
+   * The intermittent failure this replaces: with several lines registered and
+   * unspoken at once — a greeting still playing, a silence prod behind it — an
+   * ack paired with whichever was registered first. A mismatch then invented an
+   * `unattributed` line, left the real one pending until the watchdog re-spoke
+   * it, and put a line on the bubble that the host was not saying.
+   */
+  {
+    const g = mk();
+    const first = registerUtterance(g, "greeting", "नमस्कार सभी को, खेल शुरू करते हैं");
+    const second = registerUtterance(g, "turn", "लाल तार का सवाल सुनिए ध्यान से");
+
+    // The SECOND line's transcript arrives first — Agora spoke it first.
+    applyAck(g, {
+      turnId: 40,
+      status: "ended",
+      text: "लाल तार का सवाल सुनिए ध्यान से",
+      atMs: Date.now(),
+    });
+    check(
+      "an ack matches the line whose words it carries, not the oldest waiting",
+      findUtterance(g, second.id)?.turnId === 40,
+      `matched ${findUtterance(g, first.id)?.turnId === 40 ? first.id : second.id}`,
+    );
+    check("the other line is left untouched", findUtterance(g, first.id)?.status === "pending");
+    check("and nothing was invented", divergences(g).unattributed === 0);
+
+    // Now the greeting's own transcript, mangled a little as TTS transcripts are.
+    applyAck(g, {
+      turnId: 41,
+      status: "ended",
+      text: "नमस्कार सभी को खेल शुरू करते हैं",
+      atMs: Date.now(),
+    });
+    check("and the greeting then matches its own", findUtterance(g, first.id)?.turnId === 41);
+    check("still nothing invented", divergences(g).unattributed === 0);
+  }
+
+  /* -- learning how fast he actually talks -------------------------------- */
+  /**
+   * Sarvam sends no word timings, so the subtitle reveal has to pace itself.
+   * Paced by an assumption it drifts for the whole length of a line; paced by a
+   * measurement it only varies within a sentence. These assert that the
+   * measurement is taken only from turns that can teach something.
+   */
+  {
+    const g = mk();
+    const u = registerUtterance(g, "turn", "एक दो तीन चार पाँच छह सात आठ");
+    applyAck(g, { turnId: 60, status: "speaking", text: "", atMs: Date.now() });
+    // Backdate the start so the turn "took" four seconds for eight words.
+    findUtterance(g, u.id)!.speakingAt = Date.now() - 4000;
+    applyAck(g, { turnId: 60, status: "ended", text: "एक दो तीन", atMs: Date.now() });
+
+    const rate = g.utterances.wordsPerSecond;
+    check(
+      "a completed turn teaches a real speaking rate",
+      rate !== null && rate > 1.6 && rate < 2.4,
+      String(rate),
+    );
+
+    // A turn cut off spent less time than its words needed — it must not teach.
+    const before = g.utterances.wordsPerSecond;
+    const v = registerUtterance(g, "turn", "बहुत लंबा वाक्य जो पूरा नहीं हुआ यहाँ");
+    applyAck(g, { turnId: 61, status: "speaking", text: "", atMs: Date.now() });
+    findUtterance(g, v.id)!.speakingAt = Date.now() - 200;
+    applyAck(g, { turnId: 61, status: "interrupted", text: "बहुत", atMs: Date.now() });
+    check(
+      "an interrupted turn teaches nothing — it was cut short",
+      g.utterances.wordsPerSecond === before,
+    );
+
+    // An absurd measurement is rejected rather than averaged in.
+    const w = registerUtterance(g, "turn", "एक दो तीन चार पाँच छह");
+    applyAck(g, { turnId: 62, status: "speaking", text: "", atMs: Date.now() });
+    findUtterance(g, w.id)!.speakingAt = Date.now() - 30;
+    applyAck(g, { turnId: 62, status: "ended", text: "एक", atMs: Date.now() });
+    check(
+      "an impossible rate is refused, not averaged in",
+      g.utterances.wordsPerSecond === before,
+      String(g.utterances.wordsPerSecond),
+    );
+  }
+
+  /* -- the reveal uses the measured rate ---------------------------------- */
+  {
+    const line = "एक दो तीन चार पाँच छह सात आठ नौ दस";
+    const fast = charsPerSecondFor(line, 4);
+    const slow = charsPerSecondFor(line, 1);
+    check("a faster measured rate reveals faster", fast > slow);
+    check(
+      "and with no measurement it falls back to the assumption",
+      charsPerSecondFor(line, null) === charsPerSecondFor(line),
+    );
+  }
+
+  /* -- degraded mode ------------------------------------------------------ */
+  {
+    const g = mk();
+    check("a room with nobody reporting acks starts degraded", isDegraded(g.utterances));
+    applyAck(g, { turnId: 1, status: "speaking", text: "सुन रहे हैं", atMs: Date.now() });
+    check("one ack is enough to trust the transport", !isDegraded(g.utterances));
+    check(
+      "and it goes degraded again once the reporter goes quiet",
+      isDegraded(g.utterances, Date.now() + DEGRADE_AFTER_MS + 1000),
+    );
+  }
+
+  /* -- what the screens are handed --------------------------------------- */
+  {
+    const g = mk();
+    const a = registerUtterance(g, "turn", "पहली लाइन");
+    applyAck(g, { turnId: 21, status: "speaking", text: "पहली लाइन", atMs: Date.now() });
+    const b = registerUtterance(g, "turn", "दूसरी लाइन");
+    check(
+      "a line still being spoken keeps the bubble, even with another queued",
+      currentUtterance(g.utterances)?.id === a.id,
+    );
+    applyAck(g, { turnId: 21, status: "ended", text: "पहली लाइन", atMs: Date.now() });
+    check(
+      "and hands over once it has actually ended",
+      currentUtterance(g.utterances)?.id === b.id,
+    );
+  }
+}
+
+/* -- who said that -------------------------------------------------------- */
+/**
+ * Attribution, which until today was dead code.
+ *
+ * `attribute()` was never called from anywhere: every `setSpeaker` passed
+ * `contested: false` as a literal, so `game.contested` could not become true and
+ * the host's contested-floor branch in the prompt was unreachable. Three phones
+ * were streaming mic levels at 30Hz into a store nothing read.
+ *
+ * Since the floor became exclusive, the *normal* path is a certainty rather than
+ * a measurement — one publisher, one possible speaker. The mic-level argmax below
+ * it is kept and still tested, but only reachable by calling `attribute()`
+ * directly, as these assertions do. That is deliberate: it is the fallback if the
+ * exclusive rule is ever relaxed, and an untested fallback is not a fallback.
+ */
+console.log("\nattribution");
+{
+  const spk = (code: string) => {
+    const g = createGame({ code });
+    g.phase = "running";
+    g.startedAt = Date.now();
+    return g;
+  };
+  /** A burst of mic samples for one player, inside the telemetry window. */
+  const speak = (code: string, playerId: string, level: number, n = 30) => {
+    const now = Date.now();
+    recordLevels(
+      code,
+      playerId,
+      Array.from({ length: n }, (_, i) => ({ t: now - 400 + i * 10, level })),
+    );
+  };
+  const win = (text: string) => speechWindow(text);
+
+  /* -- the normal path: one publisher, so no guessing at all -------------- */
+  {
+    const g = spk("ATT1");
+    const a = addPlayer(g, { name: "Rahul" });
+    const b = addPlayer(g, { name: "Priya" });
+    setPeerMode(g, a.id, false);
+    // Priya's own handset hears her loudly — she is talking to the others.
+    speak(g.code, b.id, 0.9, 60);
+    speak(g.code, a.id, 0.05);
+
+    const turn = recordUserTurn(g, "मेरा जवाब नारियल है");
+    check(
+      "with one contestant on air, attribution is certain rather than measured",
+      turn.playerId === a.id && turn.source === "live",
+      `${turn.playerName} via ${turn.source}`,
+    );
+    check("and never contested", !turn.contested && turn.confidence === 1);
+    check(
+      "a muted contestant cannot win on her own mic level — the agent never heard her",
+      turn.playerId !== b.id,
+    );
+    check("the game records the speaker", g.lastSpeaker === a.id);
+  }
+
+  /* -- the fallback, driven directly ------------------------------------- */
+  /**
+   * Two candidates cannot arise from `setPeerMode` any more, so these call
+   * `attribute()` with the candidate list a relaxed policy would produce.
+   */
+  {
+    const g = spk("ATT2");
+    const a = addPlayer(g, { name: "Rahul" });
+    const b = addPlayer(g, { name: "Priya" });
+    const both = [a.id, b.id];
+
+    speak(g.code, a.id, 0.4);
+    speak(g.code, b.id, 0.02);
+    const clear = attribute(g.code, win("नारियल").startMs, Date.now(), both);
+    check("with two candidates the loudest wins", clear.playerId === a.id);
+    check("and the measurement is what decided it", clear.source === "level");
+    check("not contested when the margin is wide", !clear.contested);
+  }
+  {
+    const g = spk("ATT3");
+    const a = addPlayer(g, { name: "Rahul" });
+    const b = addPlayer(g, { name: "Priya" });
+    speak(g.code, a.id, 0.30);
+    speak(g.code, b.id, 0.28);
+    const close = attribute(g.code, win("नारियल").startMs, Date.now(), [a.id, b.id]);
+    check("two comparable speakers are flagged contested", close.contested);
+    check("a name is still offered rather than nothing", close.playerId !== null);
+    check(
+      "confidence reports how close it was",
+      close.confidence > 0.4 && close.confidence < 0.6,
+      String(close.confidence),
+    );
+  }
+  {
+    const g = spk("ATT4");
+    const a = addPlayer(g, { name: "Rahul" });
+    const b = addPlayer(g, { name: "Priya" });
+    speak(g.code, a.id, 0.05);
+    speak(g.code, b.id, 0.30);
+    setHolding(g.code, a.id, true);
+    const held = attribute(g.code, win("मैं बोल रहा हूँ").startMs, Date.now(), [
+      a.id,
+      b.id,
+    ]);
+    check("hold-to-talk overrides a louder neighbour", held.playerId === a.id);
+    check("and says so", held.source === "hold");
+  }
+  {
+    const g = spk("ATT5");
+    const a = addPlayer(g, { name: "Rahul" });
+    const b = addPlayer(g, { name: "Priya" });
+    speak(g.code, a.id, 0.001);
+    speak(g.code, b.id, 0.001);
+    const quiet = attribute(g.code, win("कुछ").startMs, Date.now(), [a.id, b.id]);
+    check("below the noise floor nobody is named", quiet.playerId === null);
+    check("and the source says so", quiet.source === "none");
+  }
+}
+
+/* -- the host hearing himself --------------------------------------------- */
+/**
+ * The echo filter, and the answer it used to eat.
+ *
+ * In Mode A the room speaker leaks into three open phone mics and no AEC can
+ * help, because the phone is not the device making the sound. The old filter
+ * asked "is this turn an echo" and dropped the whole thing when it matched — so
+ * a contestant answering *while* the host was still talking produced one ASR
+ * turn containing both, the containment test matched, and their answer was
+ * discarded before the model ever saw it. No error, no log line.
+ */
+console.log("\nself-echo");
+{
+  const g = createGame({ code: "ECHO" });
+  g.phase = "running";
+  const host = "लाल तार का सवाल — ऐसी कौन सी चीज़ है जिसके ऊपर बाल हैं";
+  rememberAgentUtterance(g.code, host);
+
+  check(
+    "a pure echo is still recognised",
+    stripEcho(g.code, host) === "",
+  );
+  check(
+    "a slightly mangled echo is still recognised",
+    stripEcho(g.code, host.replace("कौन सी", "कौनसी")) === "",
+  );
+
+  const mixed = `${host} नारियल`;
+  const kept = stripEcho(g.code, mixed);
+  check("an echo with an answer riding on it keeps the answer", kept.includes("नारियल"), kept);
+  check("and drops the host's own sentence", !kept.includes("जिसके ऊपर बाल"), kept);
+
+  check(
+    "a short answer is never filtered, echo window or not",
+    stripEcho(g.code, "हाँ") === "हाँ",
+  );
+  check(
+    "an unrelated answer passes through untouched",
+    stripEcho(g.code, "मुझे लगता है प्याज़") === "मुझे लगता है प्याज़",
+  );
+
+  // And the same thing through the real entry point.
+  const turn = recordUserTurn(g, mixed);
+  check("recorded as a real turn, not as echo", turn.status === "final");
+  check("with the raw transcript kept for the record", turn.raw === mixed);
+  const pure = recordUserTurn(g, host);
+  check("while a pure echo is recorded as echo", pure.status === "echo");
+  check("and hands the model nothing", pure.text === "");
+}
+
+/* -- the round ends cleanly, with everything else still running ----------- */
+/**
+ * What the endgame has to survive now that there are two watchdogs and a ledger
+ * running alongside it.
+ *
+ * The failure this guards against is specific and would be very visible: the
+ * host announcing a riddle over the scoreboard because a subtitle watchdog
+ * decided a line was worth re-speaking after the game was already over.
+ */
+console.log("\nendgame interactions");
+{
+  /* -- a line in flight when the round ends is dropped, not re-spoken ----- */
+  {
+    const g = createGame({ code: "END1" });
+    addPlayer(g, { name: "Rahul" });
+    startGame(g);
+    g.activeWire = "red";
+    const u = registerUtterance(g, "turn", "लाल तार का सवाल");
+
+    endGame(g, "lost", "clock expired");
+
+    const said: string[] = [];
+    // Well past the start deadline, so the watchdog would act if it were going to.
+    sweepUtterances(g, (t) => said.push(t), Date.now() + 30_000);
+    check(
+      "a line still pending when the round ends is abandoned",
+      findUtterance(g, u.id)?.status === "abandoned",
+      findUtterance(g, u.id)?.status,
+    );
+    check(
+      "and is NEVER re-spoken over the scoreboard",
+      said.length === 0,
+      said.join(" | "),
+    );
+  }
+
+  /* -- the round still ends with the ledger mid-flight ------------------- */
+  {
+    const g = createGame({ code: "END2" });
+    addPlayer(g, { name: "Rahul" });
+    startGame(g);
+    registerUtterance(g, "turn", "कुछ बोल रहे हैं");
+    applyAck(g, { turnId: 91, status: "speaking", text: "कुछ", atMs: Date.now() });
+
+    for (const color of WIRE_COLORS) {
+      g.activeWire = color;
+      cutWire(g, color, null);
+    }
+    check("all five cut still wins, ledger busy or not", g.phase === "won");
+    check("and the clock is frozen", g.endedAt !== null);
+  }
+
+  /* -- ending twice must not double-fire -------------------------------- */
+  {
+    const g = createGame({ code: "END3" });
+    addPlayer(g, { name: "Rahul" });
+    startGame(g);
+    endGame(g, "lost", "first");
+    const seqAfterFirst = g.seq;
+    endGame(g, "won", "second");
+    check(
+      "a second endGame is ignored — the outcome cannot be rewritten",
+      g.phase === "lost",
+    );
+    check("and it emits nothing further", g.seq === seqAfterFirst);
+  }
+
+  /* -- nothing the room says after the whistle moves anything ----------- */
+  {
+    const g = createGame({ code: "END4" });
+    const a = addPlayer(g, { name: "Rahul" });
+    startGame(g);
+    setPeerMode(g, a.id, false);
+    endGame(g, "lost", "clock expired");
+    const before = g.lastSpeaker;
+    const turn = recordUserTurn(g, "अरे रुको, नारियल!");
+    check(
+      "a late answer is recorded but changes no outcome",
+      g.phase === "lost" && turn.status === "final",
+    );
+    check("and cannot re-open the round", g.endedAt !== null);
+    check("the speaker only moves if somebody was audible", g.lastSpeaker === before || turn.playerId !== null);
+  }
+}
 
 /* -- room expiry ---------------------------------------------------------- */
 /**

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Scene, CAMERA_HOME } from "./scene";
 import type { PublicGame } from "@/lib/game/state";
+import type { HostLine } from "@/lib/use-host-line";
 
 /**
  * The 3D viewport, shared by the projector and the host console.
@@ -24,7 +25,10 @@ export function StageCanvas({
   interactive = false,
   /** Bump this to hand control back to the automatic camera. */
   resetToken = 0,
-  hostSaid = null,
+  hostLine = null,
+  lineStatus = null,
+  wordsPerSecond = null,
+  onLineDone,
   frameloop,
   className,
 }: {
@@ -35,8 +39,17 @@ export function StageCanvas({
   resetToken?: number;
   /** "demand" renders one frame and stops — for honouring reduced motion. */
   frameloop?: "always" | "demand";
-  /** The host's latest line, for the speech bubble. */
-  hostSaid?: string | null;
+  /** The host's current line, for the speech bubble. */
+  hostLine?: HostLine | null;
+  /**
+   * The ledger's status for that line, when acks are flowing. Null means
+   * nobody is reporting and the bubble should time itself off the audio.
+   */
+  lineStatus?: string | null;
+  /** Measured speaking rate, for pacing the reveal. */
+  wordsPerSecond?: number | null;
+  /** Fired when that line is finished. See lib/use-host-line.ts. */
+  onLineDone?: () => void;
   className?: string;
 }) {
   /**
@@ -76,7 +89,10 @@ export function StageCanvas({
         minimal={minimal}
         interactive={interactive}
         userDriving={userDriving}
-        hostSaid={hostSaid}
+        hostLine={hostLine}
+        lineStatus={lineStatus}
+        wordsPerSecond={wordsPerSecond}
+        onLineDone={onLineDone}
       />
     </Canvas>
   );

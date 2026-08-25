@@ -72,6 +72,17 @@ const DEMO_GAME: PublicGame = {
   },
   lastSpeaker: null,
   contested: false,
+  /** Nobody has spoken on a landing page. */
+  lastTurn: null,
+  /**
+   * Nobody is speaking, and nobody is reporting acks either.
+   *
+   * `degraded: true` is the honest value for a canvas with no room behind it —
+   * there is no client subscribed to a transcript here — and it keeps the
+   * landing page on the same code path a real projector uses when the ack
+   * transport is down.
+   */
+  host: { current: null, degraded: true, wordsPerSecond: null },
   seq: 0,
 };
 

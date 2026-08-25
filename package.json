@@ -10,6 +10,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:engine": "tsx scripts/engine-check.ts",
+    "check:browser": "tsx scripts/browser-check.ts",
     "check": "tsc --noEmit && tsx scripts/engine-check.ts",
     "render:hints": "tsx --env-file-if-exists=.env.local scripts/render-hints.ts",
     "render:audio": "tsx --env-file-if-exists=.env.local scripts/render-hints.ts",
@@ -18,7 +19,9 @@
   "dependencies": {
     "@react-three/drei": "^10.7.8",
     "@react-three/fiber": "^9.7.0",
+    "agora-agent-client-toolkit": "^2.9.1",
     "agora-rtc-sdk-ng": "4.24.7",
+    "agora-rtm": "^2.3.0",
     "agora-token": "2.0.5",
     "lucide-react": "^1.33.0",
     "next": "16.3.2",
@@ -34,6 +37,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@types/three": "^0.185.4",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3"

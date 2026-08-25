@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { RtcTokenBuilder, RtcRole } from "agora-token";
+import { RtcTokenBuilder, RtmTokenBuilder, RtcRole } from "agora-token";
 import { APP_CERTIFICATE, appId } from "@/lib/env";
 import { agentUidFor, getGame } from "@/lib/game/store";
 
@@ -40,11 +40,30 @@ export async function GET(
     expireAt,
   );
 
+  /**
+   * An RTM token as well, because this is a seat that reports acks.
+   *
+   * The projector and the host console are the two surfaces that subscribe to
+   * the agent's transcript and tell the server what was actually spoken. The
+   * phones deliberately do not: they already POST level telemetry several times
+   * a second, and a third open connection per handset buys nothing — the server
+   * applies acks idempotently, so two reporters are already redundancy.
+   *
+   * Subject is `String(uid)`, matching the identity `lib/rtm.ts` logs in with.
+   */
+  const rtmToken = RtmTokenBuilder.buildToken(
+    appId(),
+    APP_CERTIFICATE(),
+    String(uid),
+    3600,
+  );
+
   return NextResponse.json({
     appId: appId(),
     channel: game.code,
     uid,
     token,
+    rtmToken,
     agentUid: agentUidFor(game.code),
   });
 }

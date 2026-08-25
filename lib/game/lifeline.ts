@@ -13,7 +13,7 @@
  * owns the lifeline, called directly from here.
  */
 
-import { makeCall } from "../vobiz";
+import { makeCall, normaliseTo } from "../vobiz";
 import { hintAudioPath } from "./riddles";
 import { PENALTY_LIFELINE, findPlayer, type Game } from "./state";
 import { beginLifeline, emit, lifelineFailed } from "./store";
@@ -71,6 +71,9 @@ export async function startLifeline(game: Game, playerId: string) {
    * spend forty-five seconds of somebody's round.
    */
   if (!game.lifeline.granted) {
+    console.error(
+      `[lifeline] ${player.name} pressed the button but the host has not granted it yet (requestedBy=${game.lifeline.requestedBy})`,
+    );
     throw new Error(
       "The host has not approved the lifeline yet. Ask them out loud first, and only call this once they have said yes.",
     );
@@ -92,12 +95,17 @@ export async function startLifeline(game: Game, playerId: string) {
 
   // A fallback number keeps the demo alive when a judge declines to give
   // theirs — which is a reasonable thing for a stranger to decline.
-  const to =
+  // Normalised, so a fallback pasted without the leading plus still dials.
+  const to = normaliseTo(
     player.consent && player.phoneE164
       ? player.phoneE164
-      : optional("FALLBACK_FRIEND_NUMBER", "");
+      : optional("FALLBACK_FRIEND_NUMBER", ""),
+  );
 
   if (!to) {
+    console.error(
+      `[lifeline] no number for ${player.name} (consent=${player.consent}, hasNumber=${player.phoneE164 !== null}) and FALLBACK_FRIEND_NUMBER is unset`,
+    );
     throw new Error(
       `${player.name} did not give a number, and no fallback number is configured. Tell them the lifeline cannot be placed and that no time has been charged.`,
     );
@@ -155,6 +163,19 @@ export async function startLifeline(game: Game, playerId: string) {
   } catch (error) {
     // Requirement #9: behave sanely and *visibly* when an external API fails.
     const reason = error instanceof Error ? error.message : "carrier error";
+    /**
+     * Say it out loud, on the server.
+     *
+     * Five different problems — no grant, no wire, no number, a rejected
+     * payload, a dead tunnel — all reach the room as the host saying the same
+     * apologetic sentence, and none of them left a trace anywhere. "Phone a
+     * friend is not working" was then unanswerable without guessing. The full
+     * carrier response goes in the log; the room still gets the polite version.
+     */
+    console.error(
+      `[lifeline] call to ${to.slice(0, 4)}…${to.slice(-3)} failed:`,
+      reason,
+    );
     calls.delete(id);
     lifelineFailed(game, reason);
 

@@ -23,14 +23,17 @@ import {
   findWire,
   lifelineLimit,
   livePlayers,
+  MAX_USER_TURNS,
   publicView,
   secondsLeft,
   type Game,
   type GameEvent,
   type Player,
+  type UserTurn,
   type WireColor,
 } from "./state";
 import { getRiddle, riddleForWire } from "./riddles";
+import { attribute, speechWindow, stripEcho } from "./attribution";
 import { LIFELINE_LINES, hostSay } from "./host-speak";
 
 type Subscriber = (event: GameEvent) => void;
@@ -151,6 +154,15 @@ export function createGame(opts?: {
       requestedBy: null,
       since: Date.now(),
     },
+    utterances: {
+      items: [],
+      lastAckHeartbeat: null,
+      counts: { abandoned: 0, unattributed: 0, lateAcks: 0 },
+      wordsPerSecond: null,
+      reporterError: null,
+      nextId: 1,
+    },
+    userTurns: [],
     wrongAnswers: [],
 
     lastSpeaker: null,
@@ -188,15 +200,44 @@ function sweepExpired(now = Date.now()): void {
   }
 }
 
+/**
+ * Give an older room object any field it was created without.
+ *
+ * Rooms live in module scope, and `next dev` hot-reloads code without clearing
+ * that scope — so a room created before a field existed survives into code that
+ * expects it. The symptom is not a nice error either: `/api/health` reads every
+ * room, so one legacy object 500s the single endpoint whose entire job is making
+ * failures visible. That is a bad way to lose your smoke test mid-build.
+ *
+ * Impossible in production, where a deploy is a fresh process holding no rooms.
+ * Kept anyway, because it costs one comparison on a path that already sweeps
+ * expiry, and because the failure it prevents happens on every schema change.
+ */
+function ensureShape(game: Game): Game {
+  game.utterances ??= {
+    items: [],
+    lastAckHeartbeat: null,
+    counts: { abandoned: 0, unattributed: 0, lateAcks: 0 },
+    wordsPerSecond: null,
+    reporterError: null,
+    nextId: 1,
+  };
+  game.userTurns ??= [];
+  return game;
+}
+
 export function getGame(code: string): Game | undefined {
   sweepExpired();
-  return store.games.get(code.toUpperCase());
+  const game = store.games.get(code.toUpperCase());
+  return game ? ensureShape(game) : undefined;
 }
 
 /** For the host console, which lists rooms without knowing a code. */
 export function listGames(): Game[] {
   sweepExpired();
-  return [...store.games.values()].sort((a, b) => b.seq - a.seq);
+  return [...store.games.values()]
+    .map(ensureShape)
+    .sort((a, b) => b.seq - a.seq);
 }
 
 /** Milliseconds until this room is dropped. Zero once it is due. */
@@ -330,6 +371,32 @@ export function setPeerMode(game: Game, playerId: string, peerMode: boolean) {
 
   player.peerMode = peerMode;
 
+  /**
+   * The floor is exclusive: one contestant on air at a time.
+   *
+   * Going live mutes everybody else. This is not a convenience — it is what
+   * makes attribution a fact instead of a measurement. Agora hands the agent one
+   * mixed audio stream and human transcripts come back as `uid: 0` (verified,
+   * see docs/AGORA-NOTES.md), so the *only* way to know who spoke is to know who
+   * could have. With one publisher there is exactly one answer and nothing is
+   * inferred from mic levels at all.
+   *
+   * It is also the same thing Agora's SAL "locking" mode does, done better for
+   * this game: SAL picks one speaker for the whole session and cannot be
+   * re-pointed — `sal` is absent from the `/update` request body — whereas this
+   * is re-decided every time somebody presses their button, using names we
+   * already have.
+   *
+   * What it gives up is deliberate: two contestants can no longer talk over each
+   * other, so `contested` becomes unreachable and the host never arbitrates a
+   * split floor. That was a considered trade, not an oversight.
+   */
+  if (!peerMode) {
+    for (const other of game.players) {
+      if (other.id !== player.id) other.peerMode = true;
+    }
+  }
+
   const live = livePlayers(game);
   emit(game, "peer_mode_changed", {
     playerId,
@@ -350,8 +417,21 @@ export function setPeerMode(game: Game, playerId: string, peerMode: boolean) {
   return player;
 }
 
-/** Put everyone back into discussion — used at round end and by the host console. */
+/**
+ * Put everyone back into discussion — used at round end and by the host console.
+ *
+ * Only ever in that direction. "Everybody live" contradicts the exclusive floor
+ * enforced in `setPeerMode`, and a function that quietly did it anyway would
+ * leave three mics publishing while the ledger believed attribution was exact —
+ * the host would be handed a name with total confidence and no basis for it. So
+ * it throws instead, and the caller finds out at the point of the mistake.
+ */
 export function allPeerMode(game: Game, peerMode: boolean) {
+  if (!peerMode) {
+    throw new Error(
+      "The floor is exclusive — only one contestant may be live. Use peer_mode on a single player instead.",
+    );
+  }
   for (const player of game.players) player.peerMode = peerMode;
   emit(game, "peer_mode_all", {
     peerMode,
@@ -810,6 +890,118 @@ export function cancelLifelineRequest(game: Game) {
 /* -------------------------------------------------------------------------- */
 /* Attribution                                                                */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Record what the room just said, and work out who said it.
+ *
+ * This is the call that was missing. `attribute()` has existed since the start
+ * and was never invoked once, because it needs a start and an end for the
+ * utterance and nothing knew either — so every `setSpeaker` below passed
+ * `contested: false` as a literal, `game.contested` was permanently false, and
+ * the host's contested-floor branch in the system prompt could never fire. Three
+ * phones have been streaming mic levels at 30Hz into a store nothing read.
+ *
+ * Called from the LLM proxy, which is where a finished transcript actually
+ * arrives server-side. That is deliberately not the same thing as Agora's
+ * per-turn RTM event: the proxy path works today with no Signaling dependency,
+ * and if the RTM user-turn stream later proves reliable it can supply a true measured window
+ * instead of the one derived in `speechWindow`.
+ *
+ * The returned turn is what the caller should hand to the model — for a mixed
+ * transcript that is the answer with the host's echo cut out of it.
+ */
+export function recordUserTurn(
+  game: Game,
+  raw: string,
+): UserTurn {
+  const kept = stripEcho(game.code, raw);
+
+  const id = `t${game.userTurns.length + 1}`;
+  if (!kept) {
+    /**
+     * Nothing but the host hearing himself.
+     *
+     * Recorded rather than dropped on the floor: "the host is talking to himself
+     * through the phone mics" and "the ASR is returning nothing" look identical
+     * from the outside, and only one of them is a problem with the room.
+     */
+    const echo: UserTurn = {
+      id,
+      text: "",
+      raw,
+      status: "echo",
+      at: Date.now(),
+      playerId: null,
+      playerName: null,
+      contested: false,
+      confidence: 0,
+      source: "none",
+    };
+    game.userTurns.push(echo);
+    trimUserTurns(game);
+    emit(game, "user_turn_echo", { id, raw });
+    return echo;
+  }
+
+  const { startMs, endMs } = speechWindow(kept);
+  /**
+   * Only contestants the agent could actually hear are candidates.
+   *
+   * Peer Talk unpublishes a handset, so a muted contestant is not in the mix the
+   * ASR ran on — whatever their own phone measured. Passing the live set turns
+   * the single-speaker case into a certainty instead of a score, and stops a
+   * muted side-conversation from ever winning the argmax.
+   */
+  const a = attribute(
+    game.code,
+    startMs,
+    endMs,
+    livePlayers(game).map((p) => p.id),
+  );
+  const player = a.playerId ? findPlayer(game, a.playerId) : undefined;
+
+  const turn: UserTurn = {
+    id,
+    text: kept,
+    raw: kept === raw.trim() ? null : raw,
+    status: "final",
+    at: Date.now(),
+    playerId: a.playerId,
+    playerName: player?.name ?? null,
+    contested: a.contested,
+    confidence: a.confidence,
+    source: a.source,
+  };
+  game.userTurns.push(turn);
+  trimUserTurns(game);
+
+  /**
+   * Only claim a speaker when the telemetry actually named one.
+   *
+   * `attribute` returns `source: "none"` when every phone was below the noise
+   * floor, and in that case naming the previous speaker would be worse than
+   * naming nobody — the host would address someone who did not speak, by name,
+   * in front of an audience.
+   */
+  if (a.playerId) setSpeaker(game, a.playerId, a.contested);
+
+  emit(game, "user_turn", {
+    id,
+    text: kept,
+    playerId: a.playerId,
+    playerName: turn.playerName,
+    contested: a.contested,
+    confidence: Number(a.confidence.toFixed(2)),
+    source: a.source,
+  });
+  return turn;
+}
+
+function trimUserTurns(game: Game) {
+  if (game.userTurns.length > MAX_USER_TURNS) {
+    game.userTurns.splice(0, game.userTurns.length - MAX_USER_TURNS);
+  }
+}
 
 export function setSpeaker(
   game: Game,

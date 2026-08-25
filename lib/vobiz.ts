@@ -35,6 +35,70 @@ export type MakeCallResult = {
  *
  * A 200 only means the call was *queued*. Real state arrives on the webhooks.
  */
+/**
+ * The two number formats Vobiz wants, which are not the same format.
+ *
+ * From `docs/VOBIZ.md`: **`from` is E.164 without the plus** and must be a number
+ * you own; the documented `to` example carries the plus. That asymmetry is a trap
+ * — both fields hold "a phone number", both look right to a human, and getting
+ * either wrong surfaces as the host saying "the call could not be placed" with no
+ * indication which end was at fault.
+ *
+ * So the env is read forgivingly and normalised here, once, rather than every
+ * operator being expected to remember which field takes a plus.
+ */
+export function normaliseFrom(raw: string): string {
+  return raw.trim().replace(/[^\d]/g, "");
+}
+
+export function normaliseTo(raw: string): string {
+  const digits = raw.trim().replace(/[^\d]/g, "");
+  return digits ? `+${digits}` : "";
+}
+
+/**
+ * Are the configured numbers plausible? For `/api/health`.
+ *
+ * Shape only — nobody can tell from here whether Vobiz will accept them, and a
+ * number that is owned by somebody else looks identical to one that is not. But
+ * a truncated paste, a stray space, or a local ten-digit number with no country
+ * code are all detectable, and all of them are silent until a live call fails.
+ */
+export function checkNumbers(): {
+  from: { value: string; ok: boolean; note: string };
+  fallback: { value: string; ok: boolean; note: string } | null;
+} {
+  const mask = (v: string) =>
+    v.length > 6 ? `${v.slice(0, 4)}…${v.slice(-3)}` : v || "(unset)";
+
+  const rawFrom = optional("VOBIZ_FROM_NUMBER", "");
+  const from = normaliseFrom(rawFrom);
+  const fromOk = from.length >= 11 && from.length <= 15;
+
+  const rawFallback = optional("FALLBACK_FRIEND_NUMBER", "");
+  const fallback = rawFallback ? normaliseTo(rawFallback) : "";
+  const fallbackOk = fallback.replace("+", "").length >= 11;
+
+  return {
+    from: {
+      value: mask(from),
+      ok: fromOk,
+      note: fromOk
+        ? "E.164 without the plus, as Vobiz requires"
+        : `${from.length} digits after cleaning — expected 11 to 15 including the country code. A ten-digit Indian number needs the leading 91.`,
+    },
+    fallback: rawFallback
+      ? {
+          value: mask(fallback),
+          ok: fallbackOk,
+          note: fallbackOk
+            ? "E.164 with the plus, as the `to` field expects"
+            : "too short — expected a country code plus the national number",
+        }
+      : null,
+  };
+}
+
 export async function makeCall(opts: {
   to: string;
   answerUrl: string;
@@ -48,9 +112,10 @@ export async function makeCall(opts: {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
-      // Must be a number you actually own. E.164 without the plus.
-      from: required("VOBIZ_FROM_NUMBER"),
-      to: opts.to,
+      // Must be a number you actually own. E.164 without the plus — normalised
+      // here so a pasted "+91…" in the env does not silently fail the call.
+      from: normaliseFrom(required("VOBIZ_FROM_NUMBER")),
+      to: normaliseTo(opts.to),
       answer_url: opts.answerUrl,
       answer_method: "POST",
       hangup_url: opts.hangupUrl,

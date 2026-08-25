@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import QRCode from "qrcode";
 import { StageCanvas } from "./stage/stage-canvas";
+import { useHostLine, idOf } from "@/lib/use-host-line";
+import { useAckReporter } from "@/lib/rtm";
 import { useRoom, formatClock } from "@/lib/use-room";
 import { RoomGone } from "@/components/room-gone";
 import { useAgora, configuredMode, type AgoraCredentials } from "@/lib/use-agora";
@@ -47,7 +49,6 @@ export default function StageView({ code }: { code: string }) {
   const [minimal, setMinimal] = useState(false);
   const [caption, setCaption] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
-  const [hostSaid, setHostSaid] = useState<string | null>(null);
   const [menuIn, setMenuIn] = useState<number | null>(null);
   const router = useRouter();
 
@@ -56,6 +57,69 @@ export default function StageView({ code }: { code: string }) {
     credentials,
     mode: configuredMode(),
   });
+
+  /**
+   * The host's lines, queued rather than overwritten.
+   *
+   * Everything he says arrives here from the LLM proxy before TTS. It is a queue
+   * because Agora plays its own outbound lines in order, so two arriving close
+   * together are both spoken — and the old single-slot state showed only the
+   * second. See lib/use-host-line.ts.
+   */
+  const { line: hostLine, lineDone } = useHostLine(onEvent);
+
+  /**
+   * Report the host's real transcript inward, so the ledger has acks to act on.
+   *
+   * Silent no-op without an `rtmToken`, and every failure inside it leaves the
+   * room `degraded` — which falls back to timing the subtitle off the audio
+   * level, exactly as before this existed.
+   */
+  useAckReporter({
+    code,
+    credentials,
+    clientRef: agora.clientRef,
+    joined: agora.joined,
+  });
+
+  /**
+   * Server truth when the acks are flowing; the local queue when they are not.
+   *
+   * These are the two halves of a fail-closed design. With a reporter alive, the
+   * ledger knows which line is actually being spoken and how much of it came
+   * out, so that wins. With nobody reporting, insisting on acks would mean no
+   * subtitles at all — so the client-side queue takes over and the line is timed
+   * off the audio level.
+   *
+   * For an interrupted line the text shown is what was actually SPOKEN, not what
+   * was intended. That is the whole point of keeping the two apart: printing the
+   * rest of a riddle the room never heard hands over the answer.
+   */
+  const degraded = game?.host?.degraded ?? true;
+  const served = game?.host?.current ?? null;
+  const line =
+    !degraded && served
+      ? {
+          id: idOf(served.id),
+          text:
+            served.status === "interrupted" && served.spoken
+              ? served.spoken
+              : served.text,
+        }
+      : hostLine;
+  const lineStatus = degraded ? null : (served?.status ?? null);
+
+  /**
+   * Has this round already begun, according to the server?
+   *
+   * `started` is local state, so a projector reload forgot the round had ever
+   * happened: it offered "Start the game" over a finished board, and pressing it
+   * re-joined a host who opened with the greeting again while the screen still
+   * read "phat gaya". The server knows — anything other than `lobby` means the
+   * lobby panel has no business being on screen.
+   */
+  const roundBegun = game ? game.phase !== "lobby" : false;
+  const roundFinished = game?.phase === "won" || game?.phase === "lost";
 
   const outcomeSfx = useRef<Record<string, HTMLAudioElement>>({});
   const playedOutcome = useRef(false);
@@ -132,6 +196,17 @@ export default function StageView({ code }: { code: string }) {
    * gesture to spend. Without this the endgame is silent and there is no error.
    */
   const start = useCallback(async () => {
+    /**
+     * Nothing to start. The board is finished and the host must not re-greet.
+     *
+     * Belt to the braces of hiding the panel: a stale click, a double tap, or a
+     * keyboard activation could still land here, and the cost is the opening
+     * line playing over a scoreboard. Use the host console's reset to play again.
+     */
+    if (roundFinished) {
+      setNote("This round is over. Reset it from the host console to play again.");
+      return;
+    }
     setStarting(true);
     setNote(null);
     try {
@@ -139,16 +214,23 @@ export default function StageView({ code }: { code: string }) {
         const audio = new Audio(src);
         audio.preload = "auto";
         audio.volume = 0;
-        audio
-          .play()
-          .then(() => {
-            audio.pause();
-            audio.currentTime = 0;
-            audio.volume = 1;
-          })
-          .catch(() => {
-            // A missing file is a warning, not a failure — /api/health reports it.
-          });
+        /**
+         * Restore the volume whatever happens to the silent unlock.
+         *
+         * This is the bug that made the endgame silent. The unlock plays each
+         * clip at volume 0 to spend the click, and the volume was only put back
+         * inside `.then()`. When `play()` rejected — autoplay policy, a slow
+         * decode, anything — the catch swallowed it and the element was left at
+         * **volume 0 forever**. Minutes later the stinger played perfectly and
+         * nobody heard a thing, the `ended` event fired on schedule, and the
+         * closing line followed as if it had worked. Nothing in any log.
+         */
+        const rearm = () => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = 1;
+        };
+        audio.play().then(rearm).catch(rearm);
         outcomeSfx.current[key] = audio;
       }
 
@@ -191,7 +273,7 @@ export default function StageView({ code }: { code: string }) {
     } finally {
       setStarting(false);
     }
-  }, [code]);
+  }, [code, roundFinished]);
 
   /**
    * Bring the host in only once this projector is subscribed and listening.
@@ -220,10 +302,6 @@ export default function StageView({ code }: { code: string }) {
   useEffect(
     () =>
       onEvent((event) => {
-        // Everything the host says, straight from the LLM proxy before TTS.
-        if (event.type === "host_said" || event.type === "agent_spoke") {
-          setHostSaid(String(event.payload.text ?? ""));
-        }
         if (event.type === "wire_selected") {
           setCaption(String(event.payload.screen ?? ""));
         }
@@ -257,7 +335,23 @@ export default function StageView({ code }: { code: string }) {
     playedOutcome.current = true;
 
     const key = game.phase === "won" ? "win" : "lose";
-    const audio = outcomeSfx.current[key];
+    /**
+     * Fall back to a fresh element if the unlock never ran on this surface.
+     *
+     * `start()` preloads both clips, but the round can begin without it — the
+     * host console has its own start button, and a projector reloaded mid-round
+     * never sees one. There was then no preloaded element at all, so the stinger
+     * was skipped silently and only the closing line landed.
+     */
+    const audio =
+      outcomeSfx.current[key] ??
+      (() => {
+        const fresh = new Audio(OUTCOME_AUDIO[key as "win" | "lose"]);
+        outcomeSfx.current[key] = fresh;
+        return fresh;
+      })();
+    // Whatever path produced this element, it must be audible.
+    audio.volume = 1;
 
     /**
      * Three separate things race to trigger this — the stinger ending, the
@@ -284,7 +378,17 @@ export default function StageView({ code }: { code: string }) {
 
     if (audio) {
       audio.addEventListener("ended", () => void closingLine(), { once: true });
-      audio.play().catch(() => void closingLine());
+      audio.addEventListener(
+        "playing",
+        () => console.info("[kkt-stinger] playing", key),
+        { once: true },
+      );
+      audio.play().catch((err) => {
+        // Loud. A silent endgame is the most visible failure in the show, and it
+        // has now happened once for a reason nothing recorded.
+        console.error("[kkt-stinger] could not play", key, err);
+        void closingLine();
+      });
       // If the file is absent or blocked the stinger silently never plays, so
       // make sure the closing line still lands. `paused` flips false the moment
       // play() is called, so a clip that is merely still buffering does not trip
@@ -363,7 +467,10 @@ export default function StageView({ code }: { code: string }) {
         minimal={minimal}
         interactive
         resetToken={resetToken}
-        hostSaid={hostSaid}
+        hostLine={line}
+        lineStatus={lineStatus}
+        wordsPerSecond={game?.host?.wordsPerSecond ?? null}
+        onLineDone={lineDone}
         className="absolute inset-0"
       />
 
@@ -571,7 +678,7 @@ export default function StageView({ code }: { code: string }) {
        * only the panel itself is solid, so the set is doing its job from the
        * first second.
        */}
-      {!started && (
+      {!started && !roundBegun && (
         <div className="absolute inset-0 grid place-items-center">
           {/* Just enough scrim to keep the panel legible against the render. */}
           <div
