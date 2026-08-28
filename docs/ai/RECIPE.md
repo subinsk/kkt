@@ -7,10 +7,6 @@ paheliyan. Each correct answer cuts one of five wires. Six minutes on the clock.
 Stuck? **Phone a Friend** places a real PSTN call, and a voice on the other end
 reads the hint on loop until the lifeline expires.
 
-The interesting part is not the game. It is that **`llm.url` points at your own
-server**, not at a model provider, and that one indirection is what makes an
-authoritative multiplayer game possible on top of a voice pipeline at all.
-
 ## What makes this recipe different
 
 Most voice-agent recipes are one user, one agent, and the model is trusted to
