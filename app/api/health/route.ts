@@ -254,7 +254,11 @@ export async function GET(request: NextRequest) {
     keys,
     llm: {
       provider: optional("LLM_PROVIDER", "(inferred from URL)"),
-      model: optional("LLM_MODEL", "openai/gpt-oss-120b"),
+      // Same default as lib/llm.ts. These two disagreeing is not cosmetic:
+      // this field exists so you can read what the host is actually thinking
+      // with, and a health check that reports a model nobody is running is the
+      // one lie this endpoint must never tell.
+      model: optional("LLM_MODEL", "llama-3.3-70b-versatile"),
       upstream: optional("LLM_UPSTREAM_URL", "(default: Groq)"),
     },
     vobiz: numbers,

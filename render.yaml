@@ -57,8 +57,17 @@ services:
         value: groq
       - key: LLM_UPSTREAM_URL
         value: https://api.groq.com/openai/v1/chat/completions
+      # Must match the default in lib/llm.ts, which is where the reasoning
+      # lives: the host does not merely talk, it has to decide to call
+      # cut_wire, and the gpt-oss family does not do parallel tool calls
+      # (AGENTS.md). A brain that chats instead of acting is indistinguishable
+      # on stage from a broken wire panel — the contestant answers correctly,
+      # the host agrees out loud, and nothing is cut.
+      #
+      # This value overrides that default, so it is not decoration. It was
+      # openai/gpt-oss-120b, which is exactly the model the code was moved off.
       - key: LLM_MODEL
-        value: openai/gpt-oss-120b
+        value: llama-3.3-70b-versatile
       - key: LLM_REASONING_EFFORT
         value: low
       - key: LLM_MAX_TOKENS
