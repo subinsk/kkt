@@ -34,17 +34,45 @@ export const dynamic = "force-dynamic";
  * served perfectly well. Reporting those as missing would be a false alarm on
  * every single deploy.
  *
- * So when the disk says no, ask over HTTP before believing it — but ask *this*
- * host, never PUBLIC_BASE_URL. Those can be different origins, and a check that
- * probed PUBLIC_BASE_URL would happily report another process's files as proof
- * that this build shipped them. Whether PUBLIC_BASE_URL is the right origin at
- * all is a separate question, answered by the split-brain check below.
+ * So on Vercel only, when the disk says no, ask over HTTP before believing it —
+ * and ask *this* host, never PUBLIC_BASE_URL. Those can be different origins,
+ * and a check that probed PUBLIC_BASE_URL would happily report another process's
+ * files as proof that this build shipped them. Whether PUBLIC_BASE_URL is the
+ * right origin at all is a separate question, answered by the split-brain check
+ * below.
+ *
+ * Only on Vercel, because this route is Render's health check and cannot ask
+ * Render for itself. See the note in reachable().
  */
 async function reachable(localPath: string, url: string): Promise<boolean> {
   if (existsSync(localPath)) return true;
+
+  /**
+   * The disk is the whole answer everywhere except Vercel, so do not ask twice.
+   *
+   * This route is `healthCheckPath` in render.yaml, and Render will not route
+   * this service's public hostname to an instance that has not yet passed its
+   * health check. So probing our own origin from inside the health check waits
+   * on a deploy that is waiting on the probe. Render's edge accepts the socket
+   * and holds it, which is the bad kind of hang: no headers ever arrive, so the
+   * only limit is undici's 300s default and the deploy dies as `Timed Out`
+   * while `next start` sits there having reported ready in a second.
+   *
+   * It is reachable at all only because render-hints.ts deliberately never
+   * fails a build (a game with no lifeline audio still plays), so an empty
+   * public/audio/hints is a warning this endpoint is meant to *report* — not
+   * one it should hang trying to double-check.
+   */
+  if (!process.env.VERCEL) return false;
   if (!url) return false;
   try {
-    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    // Bounded, because a health check that can hang is worse than one that is
+    // wrong: a false "missing" is a visible warning, a stall is a dead deploy.
+    const res = await fetch(url, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: AbortSignal.timeout(2000),
+    });
     return res.ok;
   } catch {
     return false;

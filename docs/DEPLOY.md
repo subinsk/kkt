@@ -134,7 +134,16 @@ the clip count in `/api/health`. Check it after every deploy.
 One wrinkle worth knowing: on a CDN-backed host `public/` is not on the serving
 process's filesystem, so an `existsSync` check reports every clip as missing even
 when they are served fine. `/api/health` therefore falls back to an
-HTTP `HEAD` when the disk says no.
+HTTP `HEAD` when the disk says no — **on Vercel only**.
+
+Not on Render, and the reason is the one that cost a deploy. `/api/health` is
+`healthCheckPath`, and Render will not route the service's public hostname to an
+instance that has not yet passed its health check. A probe of our own origin from
+inside that check therefore waits on a deploy that is waiting on the probe, and
+Render's edge accepts the socket and holds it, so no headers ever arrive and
+undici's 300s default is the only limit. The log reads `Ready in 1393ms` and then
+`Timed Out`, which looks like a port-binding problem and is not one. On Render
+`public/` is on this process's own disk, so the disk is the whole answer anyway.
 
 That probe deliberately asks the host that served the request, **not**
 `PUBLIC_BASE_URL`. The two can be different origins, and probing
